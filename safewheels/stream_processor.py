@@ -1,5 +1,5 @@
 """
-RTSP stream processor for vehicle and license plate detection.
+Stream and video file processor for vehicle and license plate detection.
 """
 import cv2
 import os
@@ -7,30 +7,34 @@ import time
 import threading
 import logging
 from datetime import datetime
+import os.path
 
 logger = logging.getLogger(__name__)
 
 
 class StreamProcessor:
     """
-    Processes RTSP video stream to detect vehicles and recognize license plates.
+    Processes video streams and files to detect vehicles and recognize license plates.
     """
-    def __init__(self, rtsp_url, vehicle_detector, plate_recognizer, record_manager, config):
+    def __init__(self, input_source, vehicle_detector, plate_recognizer, record_manager, config):
         """
         Initialize StreamProcessor.
 
         Args:
-            rtsp_url: RTSP stream URL with authentication if needed
+            input_source: RTSP stream URL or video file path
             vehicle_detector: VehicleDetector instance
             plate_recognizer: PlateRecognizer instance
             record_manager: RecordManager for storing detection results
             config: Application configuration dictionary
         """
-        self.rtsp_url = rtsp_url
+        self.input_source = input_source
         self.vehicle_detector = vehicle_detector
         self.plate_recognizer = plate_recognizer
         self.record_manager = record_manager
         self.config = config
+
+        # Determine if source is a video file or a stream
+        self.is_file = os.path.isfile(input_source) if isinstance(input_source, str) else False
 
         # Processing parameters
         self.detection_interval = config.get('detection_interval', 1.0)
@@ -43,41 +47,46 @@ class StreamProcessor:
         self.capture = None
 
     def start(self):
-        """Start processing the RTSP stream in a separate thread."""
+        """Start processing the video source in a separate thread."""
         if self.running:
             return
 
         self.running = True
-        self.thread = threading.Thread(target=self._process_stream)
+        self.thread = threading.Thread(target=self._process_video)
         self.thread.daemon = True
         self.thread.start()
 
     def stop(self):
-        """Stop processing the RTSP stream."""
+        """Stop processing the video source."""
         self.running = False
         if self.thread:
             self.thread.join(timeout=3.0)
         if self.capture:
             self.capture.release()
 
-    def _process_stream(self):
-        """Main processing loop for the RTSP stream."""
-        logger.info(f"Connecting to RTSP stream: {self.rtsp_url}")
+    def _process_video(self):
+        """Main processing loop for the video source (stream or file)."""
+        source_type = "video file" if self.is_file else "RTSP stream"
+        logger.info(f"Opening {source_type}: {self.input_source}")
 
-        # OpenCV RTSP connection settings
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
-
-        self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+        # Set up video capture
+        if self.is_file:
+            self.capture = cv2.VideoCapture(self.input_source)
+        else:
+            # OpenCV RTSP connection settings
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
+            self.capture = cv2.VideoCapture(self.input_source, cv2.CAP_FFMPEG)
 
         if not self.capture.isOpened():
-            logger.error("Failed to open RTSP stream")
+            logger.error(f"Failed to open {source_type}")
             self.running = False
             return
 
         last_process_time = time.time()
+        frame_count = 0
 
         while self.running:
-            # Throttle processing based on configured interval
+            # Throttle processing based on configured interval for both streams and files
             current_time = time.time()
             if current_time - last_process_time < self.detection_interval:
                 time.sleep(0.1)  # Small sleep to reduce CPU usage
@@ -88,30 +97,38 @@ class StreamProcessor:
             # Read frame
             ret, frame = self.capture.read()
             if not ret:
-                logger.warning("Failed to read frame from stream")
-                # Attempt to reconnect if connection was lost
-                self.capture.release()
-                time.sleep(2)  # Wait before reconnecting
-                self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-                continue
+                if self.is_file:
+                    logger.info("Reached end of video file")
+                    self.running = False
+                    break
+                else:
+                    logger.warning("Failed to read frame from stream")
+                    # Attempt to reconnect if connection was lost
+                    self.capture.release()
+                    time.sleep(2)  # Wait before reconnecting
+                    self.capture = cv2.VideoCapture(self.input_source, cv2.CAP_FFMPEG)
+                    continue
+
+            frame_count += 1
 
             # Process current frame
             try:
-                self._process_frame(frame, current_time)
+                self._process_frame(frame, current_time, frame_count)
             except Exception as e:
-                logger.error(f"Error processing frame: {e}")
+                logger.error(f"Error processing frame {frame_count}: {e}")
 
         # Clean up
         if self.capture:
             self.capture.release()
 
-    def _process_frame(self, frame, timestamp):
+    def _process_frame(self, frame, timestamp, frame_count=None):
         """
         Process a single video frame.
 
         Args:
             frame: OpenCV image frame
             timestamp: Current timestamp
+            frame_count: Frame number (for video files)
         """
         # Detect vehicles
         vehicles = self.vehicle_detector.detect(frame, self.confidence_threshold)
@@ -120,7 +137,8 @@ class StreamProcessor:
             return
 
         timestamp_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-        logger.info(f"Detected {len(vehicles)} vehicles at {timestamp_str}")
+        frame_info = f" (frame {frame_count})" if frame_count is not None else ""
+        logger.info(f"Detected {len(vehicles)} vehicles at {timestamp_str}{frame_info}")
 
         # Process each detected vehicle
         for i, vehicle in enumerate(vehicles):
@@ -139,7 +157,8 @@ class StreamProcessor:
                 vehicle_img=vehicle_img,
                 plate_img=plate_img if plate_img is not None else None,
                 plate_number=plate_number,
-                confidence=confidence
+                confidence=confidence,
+                frame_number=frame_count
             )
 
     def _crop_vehicle(self, frame, vehicle):

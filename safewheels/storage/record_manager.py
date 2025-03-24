@@ -63,7 +63,8 @@ class RecordManager:
         except Exception as e:
             logger.error(f"Error saving records: {e}")
 
-    def add_detection(self, timestamp, vehicle_img, plate_img=None, plate_number=None, confidence=0.0):
+    def add_detection(self, timestamp, vehicle_img, plate_img=None,
+                      plate_number=None, confidence=0.0, frame_number=None):
         """
         Add a new vehicle detection, grouping with existing detections if within time window.
 
@@ -73,6 +74,7 @@ class RecordManager:
             plate_img: Image of the license plate (or None if not detected)
             plate_number: Recognized license plate text (or None if not recognized)
             confidence: Confidence score for the plate recognition
+            frame_number: Optional frame number (for video file processing)
         """
         # Generate unique filename for the vehicle image
         img_id = str(uuid.uuid4())
@@ -98,6 +100,10 @@ class RecordManager:
             "plate_number": plate_number,
             "confidence": confidence
         }
+
+        # Add frame number if provided (for video file processing)
+        if frame_number is not None:
+            detection["frame_number"] = frame_number
 
         # Try to group with existing active groups
         grouped = self._try_group_detection(detection)

@@ -1,12 +1,12 @@
 # SafeWheels
 
-A Python application for monitoring RTSP camera streams to detect vehicles and recognize license plates.
+A Python application for processing video streams and files to detect vehicles and recognize license plates.
 
 ## Features
 
-- Continuous monitoring of RTSP video streams
+- Process RTSP camera streams or video files
 - Vehicle detection using YOLOv8
-- License plate detection using pre-trained models
+- License plate detection and recognition using pre-trained YOLOv8 models
 - Groups multiple images of the same vehicle to improve recognition accuracy
 - Stores vehicle images and plate information for later review
 
@@ -15,7 +15,7 @@ A Python application for monitoring RTSP camera streams to detect vehicles and r
 - Python 3.13
 - OpenCV
 - PyTorch
-- Ultralytics YOLOv5/v8
+- Ultralytics YOLOv8
 
 ## Installation
 
@@ -50,10 +50,20 @@ Edit the configuration file at `config/config.json`:
 
 ## Usage
 
-Run the application:
+### Process RTSP stream
+
+Run the application using the RTSP URL defined in the config:
 
 ```
 python -m safewheels.main
+```
+
+### Process video file
+
+For debugging or offline analysis, you can process a video file:
+
+```
+python -m safewheels.main --video /path/to/your/video.mp4
 ```
 
 ## Data Storage
@@ -61,4 +71,4 @@ python -m safewheels.main
 Detected vehicles and license plates are stored in the configured `storage_path`, including:
 - Vehicle images
 - License plate images (when detected)
-- JSON records with timestamps and detection data
+- JSON records with timestamps, frame numbers, and detection data

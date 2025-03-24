@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 """
-Main module for SafeWheels - RTSP stream monitoring for vehicle detection and license plate recognition.
+Main module for SafeWheels - video stream and file processing for vehicle detection and license plate recognition.
 """
 import time
 import logging
+import argparse
+import os.path
 
 from safewheels.stream_processor import StreamProcessor
 from safewheels.models.detector import VehicleDetector
@@ -22,33 +24,51 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Main execution function for SafeWheels."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='SafeWheels - Vehicle and license plate detection')
+    parser.add_argument('--video', type=str, help='Path to video file for processing')
+    args = parser.parse_args()
+
     # Load configuration
     config = load_config()
-    rtsp_url = config.get('rtsp_url')
-    rtsp_username = config.get('rtsp_username')
-    rtsp_password = config.get('rtsp_password')
 
-    if not rtsp_url:
-        logger.error("No RTSP URL provided in configuration.")
-        return
+    # Determine input source (video file or RTSP stream)
+    if args.video and os.path.isfile(args.video):
+        input_source = args.video
+        logger.info(f"Using video file: {input_source}")
+    else:
+        # Use RTSP stream from config if no video file provided
+        rtsp_url = config.get('rtsp_url')
+        rtsp_username = config.get('rtsp_username')
+        rtsp_password = config.get('rtsp_password')
 
-    # Build authenticated URL if credentials are provided
-    if rtsp_username and rtsp_password:
-        # Format: rtsp://username:password@ip:port/path
-        parsed_url = rtsp_url.split('://')
-        if len(parsed_url) == 2:
-            protocol, address = parsed_url
-            rtsp_url = f"{protocol}://{rtsp_username}:{rtsp_password}@{address}"
-            logger.info("Using authenticated RTSP stream")
+        if not rtsp_url:
+            logger.error("No RTSP URL provided in configuration and no valid video file specified.")
+            return
+
+        # Build authenticated URL if credentials are provided
+        if rtsp_username and rtsp_password:
+            # Format: rtsp://username:password@ip:port/path
+            parsed_url = rtsp_url.split('://')
+            if len(parsed_url) == 2:
+                protocol, address = parsed_url
+                rtsp_url = f"{protocol}://{rtsp_username}:{rtsp_password}@{address}"
+                logger.info("Using authenticated RTSP stream")
+
+        input_source = rtsp_url
 
     # Initialize components
     vehicle_detector = VehicleDetector()
     plate_recognizer = PlateRecognizer()
-    record_manager = RecordManager()
+    record_manager = RecordManager(
+        storage_path=config.get('storage_path', 'data/vehicles'),
+        max_stored_images=config.get('max_stored_images', 1000),
+        grouping_window=config.get('grouping_time_window', 10)
+    )
 
     # Create stream processor
     processor = StreamProcessor(
-        rtsp_url=rtsp_url,
+        input_source=input_source,
         vehicle_detector=vehicle_detector,
         plate_recognizer=plate_recognizer,
         record_manager=record_manager,
