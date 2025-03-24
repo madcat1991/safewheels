@@ -16,3 +16,5 @@
 - **Line Length**: Maximum 120 characters
 - **Comments**: Only for complex logic or non-obvious decisions
 - **Functions**: Keep focused, under 50 lines when possible
+- **Trimming spaces**: Trim empty spaces
+- **New line**: Guarantee an empty line in the end of the file
