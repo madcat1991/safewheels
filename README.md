@@ -7,7 +7,8 @@ A Python application for processing video streams and files to detect vehicles a
 - Process RTSP camera streams or video files
 - Vehicle detection using YOLOv8
 - License plate detection using a [pre-trained](https://github.com/Muhammad-Zeerak-Khan/Automatic-License-Plate-Recognition-using-YOLOv8) YOLOv8 model
-- License plate recognition using EasyOCR
+- License plate recognition using EasyOCR with multi-language support (English, German)
+- Fast processing (average 0.24s per image)
 - Groups multiple images of the same vehicle to improve recognition accuracy
 - Stores vehicle images and plate information for later review
 
@@ -17,7 +18,7 @@ A Python application for processing video streams and files to detect vehicles a
 - OpenCV
 - PyTorch
 - Ultralytics YOLOv8
-- EasyOCR with language support for English, German and Ukrainian
+- EasyOCR
 
 ## Installation
 
@@ -27,10 +28,12 @@ A Python application for processing video streams and files to detect vehicles a
    cd safewheels
    ```
 
-2. Install dependencies
+2. Install Python dependencies
    ```
    pip install -r requirements.txt
    ```
+
+   This will install all necessary packages including EasyOCR.
 
 ## Configuration
 
@@ -42,13 +45,19 @@ Edit the configuration file at `config/config.json`:
   "rtsp_username": "username",
   "rtsp_password": "password",
   "detection_interval": 1.0,
-  "confidence_threshold": 0.5,
-  "plate_confidence_threshold": 0.7,
+  "confidence_threshold": 0.4,
+  "plate_confidence_threshold": 0.25,
   "grouping_time_window": 10,
   "storage_path": "data/vehicles",
   "max_stored_images": 1000
 }
 ```
+
+Key configuration parameters:
+- `confidence_threshold`: Minimum confidence for vehicle detection (0.0-1.0)
+- `plate_confidence_threshold`: Minimum confidence for license plate recognition (0.0-1.0)
+  - Lower values will detect more plates but may introduce false positives
+  - Higher values will be more accurate but may miss some plates
 
 ## Usage
 
