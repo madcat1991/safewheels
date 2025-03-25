@@ -29,6 +29,15 @@ def main():
     parser.add_argument('--video', type=str, help='Path to video file for processing')
     args = parser.parse_args()
 
+    # Check for required dependencies
+    try:
+        import easyocr
+        logger.info("EasyOCR package found")
+    except Exception as e:
+        logger.error(f"Failed to import EasyOCR: {e}")
+        logger.error("Make sure EasyOCR is installed: pip install easyocr")
+        return
+
     # Load configuration
     config = load_config()
 
@@ -62,8 +71,7 @@ def main():
     plate_recognizer = PlateRecognizer()
     record_manager = RecordManager(
         storage_path=config.get('storage_path', 'data/vehicles'),
-        max_stored_images=config.get('max_stored_images', 1000),
-        grouping_window=config.get('grouping_time_window', 10)
+        max_stored_images=config.get('max_stored_images', 1000)
     )
 
     # Create stream processor
@@ -79,9 +87,17 @@ def main():
         logger.info("Starting SafeWheels monitoring")
         processor.start()
 
-        # Keep the process running
-        while True:
-            time.sleep(1)
+        # For video files, wait until processing is done
+        # For streams, keep the process running indefinitely
+        if args.video and os.path.isfile(args.video):
+            # Wait for video processing to finish by checking if processor is still running
+            while processor.running:
+                time.sleep(1)
+            logger.info("Video processing completed")
+        else:
+            # For streams, keep running indefinitely
+            while True:
+                time.sleep(1)
 
     except KeyboardInterrupt:
         logger.info("Shutting down SafeWheels")

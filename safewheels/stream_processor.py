@@ -37,28 +37,33 @@ class StreamProcessor:
         self.is_file = os.path.isfile(input_source) if isinstance(input_source, str) else False
 
         # Processing parameters
-        self.detection_interval = config.get('detection_interval', 1.0)
+        self.detection_interval = config.get('detection_interval', 1.0)  # 1 frame per second
         self.confidence_threshold = config.get('confidence_threshold', 0.5)
-        self.plate_confidence_threshold = config.get('plate_confidence_threshold', 0.7)
+        self.plate_confidence_threshold = config.get('plate_confidence_threshold', 0.3)  # Lowered threshold for improved recall
 
         # Thread control
-        self.running = False
+        self._running = False
         self.thread = None
         self.capture = None
+        
+    @property
+    def running(self):
+        """Check if the processor is currently running."""
+        return self._running
 
     def start(self):
         """Start processing the video source in a separate thread."""
-        if self.running:
+        if self._running:
             return
 
-        self.running = True
+        self._running = True
         self.thread = threading.Thread(target=self._process_video)
         self.thread.daemon = True
         self.thread.start()
 
     def stop(self):
         """Stop processing the video source."""
-        self.running = False
+        self._running = False
         if self.thread:
             self.thread.join(timeout=3.0)
         if self.capture:
@@ -72,6 +77,18 @@ class StreamProcessor:
         # Set up video capture
         if self.is_file:
             self.capture = cv2.VideoCapture(self.input_source)
+            # Get video properties for file mode
+            fps = self.capture.get(cv2.CAP_PROP_FPS)
+            total_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            # Calculate frame skip based on desired frame rate
+            # We want 1 frame per self.detection_interval seconds
+            # So we need to skip (fps * self.detection_interval - 1) frames between each processed frame
+            frames_to_skip = int(fps * self.detection_interval) - 1
+            if frames_to_skip < 0:
+                frames_to_skip = 0
+                
+            logger.info(f"Video has {total_frames} frames at {fps} FPS. Processing 1 frame every {self.detection_interval} seconds (skipping {frames_to_skip} frames between each).")
         else:
             # OpenCV RTSP connection settings
             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
@@ -79,27 +96,28 @@ class StreamProcessor:
 
         if not self.capture.isOpened():
             logger.error(f"Failed to open {source_type}")
-            self.running = False
+            self._running = False
             return
 
         last_process_time = time.time()
         frame_count = 0
+        frames_since_last_process = 0
 
-        while self.running:
-            # Throttle processing based on configured interval for both streams and files
-            current_time = time.time()
-            if current_time - last_process_time < self.detection_interval:
-                time.sleep(0.1)  # Small sleep to reduce CPU usage
-                continue
-
-            last_process_time = current_time
+        while self._running:
+            # For streaming mode, throttle by time
+            if not self.is_file:
+                current_time = time.time()
+                if current_time - last_process_time < self.detection_interval:
+                    time.sleep(0.1)  # Small sleep to reduce CPU usage
+                    continue
+                last_process_time = current_time
 
             # Read frame
             ret, frame = self.capture.read()
             if not ret:
                 if self.is_file:
                     logger.info("Reached end of video file")
-                    self.running = False
+                    self._running = False
                     break
                 else:
                     logger.warning("Failed to read frame from stream")
@@ -110,10 +128,20 @@ class StreamProcessor:
                     continue
 
             frame_count += 1
+            
+            # For file mode, throttle by skipping frames
+            if self.is_file:
+                frames_since_last_process += 1
+                # Only process every N frames
+                if frames_to_skip > 0 and frames_since_last_process <= frames_to_skip:
+                    continue
+                frames_since_last_process = 0
 
             # Process current frame
             try:
-                self._process_frame(frame, current_time, frame_count)
+                self._process_frame(frame, time.time(), frame_count)
+                if self.is_file:
+                    logger.info(f"Processed frame {frame_count}/{total_frames}")
             except Exception as e:
                 logger.error(f"Error processing frame {frame_count}: {e}")
 
