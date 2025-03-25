@@ -214,17 +214,7 @@ class PlateRecognizer:
         # Remove spaces, dots, and other non-alphanumeric characters
         text = re.sub(r'[\s\.,;:_\-\'\"\(\)\[\]\{\}]', '', text)
 
-        # Common OCR corrections for license plates
-        corrections = {
-            '0': 'O',  # Sometimes 0 is mistaken for O in German plates
-            '1': 'I',  # 1 can be mistaken for I
-            '8': 'B',  # 8 can be mistaken for B
-            '5': 'S',  # 5 can be mistaken for S
-            '2': 'Z',  # 2 can be mistaken for Z
-            # NOTE: We don't automatically convert A->Ä, O->Ö, U->Ü generally
-            # as this would cause more problems than it solves.
-            # Instead, we handle specific city codes in the special cases below
-        }
+        # NOTE: These corrections are defined directly where they're used
 
         # Apply corrections only if the result looks like a plate
         # German plates typically start with 1-3 letters (city code) followed by separators and identifier
