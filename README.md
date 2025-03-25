@@ -6,7 +6,8 @@ A Python application for processing video streams and files to detect vehicles a
 
 - Process RTSP camera streams or video files
 - Vehicle detection using YOLOv8
-- License plate detection and recognition using pre-trained YOLOv8 models
+- License plate detection using a [pre-trained](https://github.com/Muhammad-Zeerak-Khan/Automatic-License-Plate-Recognition-using-YOLOv8) YOLOv8 model
+- License plate recognition using EasyOCR
 - Groups multiple images of the same vehicle to improve recognition accuracy
 - Stores vehicle images and plate information for later review
 
@@ -16,6 +17,7 @@ A Python application for processing video streams and files to detect vehicles a
 - OpenCV
 - PyTorch
 - Ultralytics YOLOv8
+- EasyOCR with language support for English, German and Ukrainian
 
 ## Installation
 

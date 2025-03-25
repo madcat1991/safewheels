@@ -1,16 +1,17 @@
 """
-License plate detection and character recognition using pre-trained YOLOv8 models.
+License plate detection and character recognition using YOLOv8 for detection and EasyOCR for text recognition.
 """
 import logging
 import cv2
 from ultralytics import YOLO
+import easyocr
 
 logger = logging.getLogger(__name__)
 
 
 class PlateRecognizer:
     """
-    Detects and recognizes license plates using pre-trained YOLOv8 models.
+    Detects and recognizes license plates using YOLOv8 for detection and EasyOCR for text recognition.
     """
 
     def __init__(self):
@@ -18,20 +19,20 @@ class PlateRecognizer:
         Initialize the license plate detector and character recognizer.
         """
         self.plate_detector = None
-        self.ocr_model = None
+        self.ocr_reader = None
         self._load_models()
 
     def _load_models(self):
         """
-        Load the pre-trained YOLOv8 models for license plate detection and character recognition.
+        Load the YOLOv8 model for license plate detection and EasyOCR for text recognition.
         """
         # Load YOLOv8 for license plate detection
         self.plate_detector = YOLO("yolov8n-lpr.pt")
         logger.info("Loaded pre-trained YOLOv8 model for license plate detection")
 
-        # Load YOLOv8 for OCR
-        self.ocr_model = YOLO("yolov8n-ocr.pt")
-        logger.info("Loaded pre-trained YOLOv8 model for license plate OCR")
+        # Initialize EasyOCR with English, German, and Ukrainian language support
+        self.ocr_reader = easyocr.Reader(['en', 'de', 'uk'], gpu=True)
+        logger.info("Initialized EasyOCR with English, German, and Ukrainian language support")
 
     def detect_plate(self, vehicle_img, confidence_threshold=0.4):
         """
@@ -97,7 +98,7 @@ class PlateRecognizer:
 
     def recognize_characters(self, plate_img, confidence_threshold=0.3):
         """
-        Recognize characters on the license plate using YOLOv8 OCR model.
+        Recognize characters on the license plate using EasyOCR.
 
         Args:
             plate_img: Cropped license plate image
@@ -113,49 +114,40 @@ class PlateRecognizer:
         # Preprocess the plate image for OCR
         plate_preprocessed = self._preprocess_plate(plate_img)
 
-        # Run YOLOv8 inference for character recognition
-        results = self.ocr_model(plate_preprocessed, conf=confidence_threshold)
+        # Run EasyOCR on the preprocessed plate image
+        results = self.ocr_reader.readtext(plate_preprocessed)
 
-        char_detections = []
-
-        # Process OCR results
-        for result in results:
-            boxes = result.boxes
-
-            for box in boxes:
-                # Get bounding box coordinates (x1, y1, x2, y2)
-                x1 = box.xyxy[0][0].item()
-                conf = box.conf.item()
-                cls_id = int(box.cls.item())
-
-                # Get character from class name
-                char = result.names[cls_id]
-
-                # Add to detections with x-coordinate for sorting
-                char_detections.append((x1, char, conf))
-
-        # If no characters detected
-        if not char_detections:
+        # If no text detected
+        if not results:
             return None, 0.0
 
-        # Sort by x-coordinate (left to right reading order)
-        char_detections.sort(key=lambda x: x[0])
+        # Extract text and confidences
+        plate_text = ""
+        total_confidence = 0.0
+        valid_results = 0
 
-        # Extract characters and confidences
-        plate_chars = [det[1] for det in char_detections]
-        confidences = [det[2] for det in char_detections]
+        for bbox, text, conf in results:
+            # Filter out detections with low confidence
+            if conf >= confidence_threshold:
+                plate_text += text
+                total_confidence += conf
+                valid_results += 1
 
-        # Join characters to form the plate number
-        plate_number = ''.join(plate_chars)
+        # If no valid text detected after filtering
+        if valid_results == 0:
+            return None, 0.0
 
         # Calculate average confidence
-        avg_confidence = sum(confidences) / len(confidences)
+        avg_confidence = total_confidence / valid_results
+
+        # Clean up the recognized text (remove spaces, control characters, etc.)
+        plate_number = ''.join(c for c in plate_text if c.isalnum())
 
         return plate_number, avg_confidence
 
     def _preprocess_plate(self, plate_img):
         """
-        Preprocess the license plate image for better character recognition.
+        Preprocess the license plate image for better character recognition with EasyOCR.
 
         Args:
             plate_img: Cropped license plate image
@@ -166,21 +158,21 @@ class PlateRecognizer:
         if plate_img is None:
             return None
 
-        # Resize to appropriate size for OCR
-        resized = cv2.resize(plate_img, (224, 64), interpolation=cv2.INTER_AREA)
+        # Resize to appropriate size for OCR while maintaining aspect ratio
+        height, width = plate_img.shape[:2]
+        new_width = 300  # Standard width that works well with EasyOCR
+        new_height = int(height * (new_width / width))
+        resized = cv2.resize(plate_img, (new_width, new_height), interpolation=cv2.INTER_AREA)
 
         # Convert to grayscale
         gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) > 2 else resized
 
-        # Apply adaptive thresholding
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                       cv2.THRESH_BINARY, 11, 2)
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
 
-        # Apply Gaussian blur to reduce noise
-        blurred = cv2.GaussianBlur(thresh, (5, 5), 0)
-
-        # Convert back to 3 channels for model input
-        processed = cv2.cvtColor(blurred, cv2.COLOR_GRAY2BGR)
+        # Apply bilateral filter to reduce noise while preserving edges
+        processed = cv2.bilateralFilter(enhanced, 11, 17, 17)
 
         return processed
 
