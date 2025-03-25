@@ -33,7 +33,6 @@ class PlateRecognizer:
 
         # Common license plate patterns (can be extended)
         self.plate_patterns = {
-            'usa': r'[A-Z0-9]{3,8}',
             'european': r'[A-ZÄÖÜ]{1,3}[-\s]?[0-9]{1,4}[-\s]?[A-ZÄÖÜß0-9]{1,3}',
             'german': r'[A-ZÄÖÜ]{1,3}[-\s]?[A-Z]{1,2}[-\s]?[0-9]{1,4}',  # Standard German format
             'generic': r'[A-ZÄÖÜ0-9]{3,8}'  # Generic alphanumeric pattern
@@ -222,11 +221,9 @@ class PlateRecognizer:
             '8': 'B',  # 8 can be mistaken for B
             '5': 'S',  # 5 can be mistaken for S
             '2': 'Z',  # 2 can be mistaken for Z
-            # German specific character corrections
-            'A': 'Ä',  # A can be mistaken for Ä in certain contexts
-            'O': 'Ö',  # O can be mistaken for Ö in certain contexts
-            'U': 'Ü',  # U can be mistaken for Ü in certain contexts
-            'SS': 'ß'  # SS can be mistaken for ß in certain contexts
+            # NOTE: We don't automatically convert A->Ä, O->Ö, U->Ü generally
+            # as this would cause more problems than it solves.
+            # Instead, we handle specific city codes in the special cases below
         }
 
         # Apply corrections only if the result looks like a plate
@@ -242,21 +239,22 @@ class PlateRecognizer:
                 digit_corrections = {'0': 'O', '1': 'I', '8': 'B', '5': 'S', '2': 'Z'}
                 for digit, letter in digit_corrections.items():
                     first_part = first_part.replace(digit, letter)
-                
+
                 # Check for common German city codes with umlauts (according to official codes)
                 # Format based on https://en.wikipedia.org/wiki/Vehicle_registration_plates_of_Germany
-                if first_part == 'MU':
-                    first_part = 'MÜ'  # München
-                elif first_part == 'LO':
-                    first_part = 'LÖ'  # Lörrach
-                elif first_part == 'TU':
-                    first_part = 'TÜ'  # Tübingen
-                elif first_part == 'FU':
-                    first_part = 'FÜ'  # Fürth
-                elif first_part == 'GO':
-                    first_part = 'GÖ'  # Göttingen
-                elif first_part == 'KO':
-                    first_part = 'KÖ'  # Köln area districts
+                umlaut_corrections = {
+                    'MU': 'MÜ',  # München
+                    'LO': 'LÖ',  # Lörrach
+                    'TU': 'TÜ',  # Tübingen
+                    'FU': 'FÜ',  # Fürth
+                    'GO': 'GÖ',  # Göttingen
+                    'KO': 'KÖ',  # Köln area districts
+                }
+                
+                # Apply the umlaut correction if this is a known city code
+                if first_part in umlaut_corrections:
+                    logger.debug(f"Correcting city code: {first_part} -> {umlaut_corrections[first_part]}")
+                    first_part = umlaut_corrections[first_part]
 
                 cleaned_text = first_part + rest_of_text
             else:
