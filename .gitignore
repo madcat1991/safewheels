@@ -47,3 +47,6 @@ config.local.py
 # Logs
 logs/
 *.log
+
+# configs
+config/local.json

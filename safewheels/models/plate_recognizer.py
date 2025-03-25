@@ -240,7 +240,7 @@ class PlateRecognizer:
                     'GO': 'GÖ',  # Göttingen
                     'KO': 'KÖ',  # Köln area districts
                 }
-                
+
                 # Apply the umlaut correction if this is a known city code
                 if first_part in umlaut_corrections:
                     logger.debug(f"Correcting city code: {first_part} -> {umlaut_corrections[first_part]}")
@@ -332,7 +332,7 @@ class PlateRecognizer:
                         detail=1,  # Return bounding boxes and confidences
                         paragraph=False,  # Treat each text box separately
                         decoder='greedy',  # Greedy decoder is much faster
-                        allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789',  # Standard Latin and German license plate characters
+                        allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789',  # Standard Latin and German characters
                         batch_size=1,  # Process one image at a time
                         mag_ratio=1.5,  # Moderate magnification ratio for speed
                         canvas_size=1280,  # Smaller canvas size for faster processing
@@ -346,7 +346,8 @@ class PlateRecognizer:
                     for box, text, confidence in detection_results1:
                         if confidence >= confidence_threshold:
                             # Skip very short segments that are likely part of another detection
-                            if len(text) <= 2 and any(r[0].startswith(text) or r[0].endswith(text) for r in all_results):
+                            is_part = any(r[0].startswith(text) or r[0].endswith(text) for r in all_results)
+                            if len(text) <= 2 and is_part:
                                 continue
 
                             cleaned_text = self._clean_plate_text(text)

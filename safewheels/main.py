@@ -27,19 +27,11 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='SafeWheels - Vehicle and license plate detection')
     parser.add_argument('--video', type=str, help='Path to video file for processing')
+    parser.add_argument('--config', type=str, help='Path to configuration file')
     args = parser.parse_args()
 
-    # Check for required dependencies
-    try:
-        import easyocr
-        logger.info("EasyOCR package found")
-    except Exception as e:
-        logger.error(f"Failed to import EasyOCR: {e}")
-        logger.error("Make sure EasyOCR is installed: pip install easyocr")
-        return
-
     # Load configuration
-    config = load_config()
+    config = load_config(args.config)
 
     # Determine input source (video file or RTSP stream)
     if args.video and os.path.isfile(args.video):
