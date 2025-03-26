@@ -13,7 +13,7 @@ class VehicleDetector:
     """
 
     # YOLOv8 class names for vehicles
-    VEHICLE_CLASSES = ['car', 'motorcycle', 'bus', 'truck']
+    VEHICLE_CLASSES = ['car', 'bus', 'truck']
 
     def __init__(self, filter_orientation=True):
         """
