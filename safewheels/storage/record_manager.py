@@ -73,10 +73,11 @@ class RecordManager:
             confidence: Confidence score for the plate recognition
             frame_number: Optional frame number (for video file processing)
         """
-        # Generate unique filename for the vehicle image
-        img_id = str(uuid.uuid4())
-        vehicle_filename = f"{img_id}_vehicle.jpg"
-        plate_filename = f"{img_id}_plate.jpg" if plate_img is not None else None
+        # Generate filename with timestamp and recognition type
+        current_time = datetime.now()
+        timestamp_ms = current_time.strftime("%Y%m%d_%H%M%S_%f")  # Full timestamp with microseconds
+        vehicle_filename = f"{timestamp_ms}_car.jpg"
+        plate_filename = f"{timestamp_ms}_plate.jpg" if plate_img is not None else None
 
         # Save vehicle image
         vehicle_path = os.path.join(self.storage_path, "images", vehicle_filename)
