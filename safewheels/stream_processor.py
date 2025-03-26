@@ -37,15 +37,19 @@ class StreamProcessor:
         self.is_file = os.path.isfile(input_source) if isinstance(input_source, str) else False
 
         # Processing parameters
-        self.detection_interval = config.get('detection_interval', 1.0)  # 1 frame per second
+
+        # 1 frame per second since FPS is 20
+        self.detection_interval = config.get('detection_interval', 0.2)
         self.confidence_threshold = config.get('confidence_threshold', 0.5)
-        self.plate_confidence_threshold = config.get('plate_confidence_threshold', 0.3)  # Lowered threshold for improved recall
+        # Lowered threshold for improved recall
+        self.plate_confidence_threshold = config.get('plate_confidence_threshold', 0.3)
+        self.stream_frames_skip = config.get('stream_frames_skip', 2)
 
         # Thread control
         self._running = False
         self.thread = None
         self.capture = None
-        
+
     @property
     def running(self):
         """Check if the processor is currently running."""
@@ -80,15 +84,19 @@ class StreamProcessor:
             # Get video properties for file mode
             fps = self.capture.get(cv2.CAP_PROP_FPS)
             total_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
-            
+
             # Calculate frame skip based on desired frame rate
             # We want 1 frame per self.detection_interval seconds
             # So we need to skip (fps * self.detection_interval - 1) frames between each processed frame
             frames_to_skip = int(fps * self.detection_interval) - 1
             if frames_to_skip < 0:
                 frames_to_skip = 0
-                
-            logger.info(f"Video has {total_frames} frames at {fps} FPS. Processing 1 frame every {self.detection_interval} seconds (skipping {frames_to_skip} frames between each).")
+
+            logger.info(
+                f"Video has {total_frames} frames at {fps} FPS. "
+                f"Processing 1 frame every {self.detection_interval} seconds (skipping {frames_to_skip} "
+                "frames between each)."
+            )
         else:
             # OpenCV RTSP connection settings
             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
@@ -99,21 +107,13 @@ class StreamProcessor:
             self._running = False
             return
 
-        last_process_time = time.time()
         frame_count = 0
         frames_since_last_process = 0
+        frames_processed = 0
 
         while self._running:
-            # For streaming mode, throttle by time
-            if not self.is_file:
-                current_time = time.time()
-                if current_time - last_process_time < self.detection_interval:
-                    time.sleep(0.1)  # Small sleep to reduce CPU usage
-                    continue
-                last_process_time = current_time
-
-            # Read frame
-            ret, frame = self.capture.read()
+            # For streaming or file, first grab the frame
+            ret = self.capture.grab()
             if not ret:
                 if self.is_file:
                     logger.info("Reached end of video file")
@@ -121,21 +121,30 @@ class StreamProcessor:
                     break
                 else:
                     logger.warning("Failed to read frame from stream")
-                    # Attempt to reconnect if connection was lost
+                    # Attempt to reconnect
                     self.capture.release()
-                    time.sleep(2)  # Wait before reconnecting
+                    time.sleep(2)
                     self.capture = cv2.VideoCapture(self.input_source, cv2.CAP_FFMPEG)
                     continue
 
             frame_count += 1
-            
-            # For file mode, throttle by skipping frames
+            frames_processed += 1
+
+            # For file mode, we still skip frames based on frames_to_skip
             if self.is_file:
                 frames_since_last_process += 1
-                # Only process every N frames
-                if frames_to_skip > 0 and frames_since_last_process <= frames_to_skip:
+                if frames_since_last_process <= frames_to_skip:
                     continue
                 frames_since_last_process = 0
+            else:
+                # For streaming mode, skip frames based on stream_frames_skip
+                if frames_processed % self.stream_frames_skip != 0:
+                    continue
+
+            # Now retrieve the frame to process
+            ret, frame = self.capture.retrieve()
+            if not ret:
+                continue
 
             # Process current frame
             try:
@@ -172,6 +181,7 @@ class StreamProcessor:
         for i, vehicle in enumerate(vehicles):
             # Extract the vehicle portion of the image
             vehicle_img = self._crop_vehicle(frame, vehicle)
+            vehicle_img = self._sharpen_image(vehicle_img)
 
             # Attempt license plate recognition
             plate_img, plate_number, confidence = self.plate_recognizer.recognize(
@@ -210,3 +220,10 @@ class StreamProcessor:
         h = min(height - y, int(h))
 
         return frame[y:y+h, x:x+w]
+
+    def _sharpen_image(self, img):
+        """
+        Apply a simple unsharp masking to lightly sharpen the image.
+        """
+        gaussian = cv2.GaussianBlur(img, (9, 9), 10.0)
+        return cv2.addWeighted(img, 1.5, gaussian, -0.5, 0)
