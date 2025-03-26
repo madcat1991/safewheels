@@ -50,3 +50,12 @@ logs/
 
 # configs
 config/local.json
+
+# claude code
+**/CLAUDE.local.md
+
+# pytorch
+*.pt
+
+# data
+data/
