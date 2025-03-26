@@ -2,9 +2,9 @@
   "rtsp_url": "",
   "rtsp_username": "",
   "rtsp_password": "",
-  "detection_interval": 1.0,
   "confidence_threshold": 0.4,
   "plate_confidence_threshold": 0.2,
+  "process_every_n_frames": 10,
   "storage_path": "data/vehicles",
   "max_stored_images": 1000
 }

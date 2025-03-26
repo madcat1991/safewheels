@@ -8,6 +8,7 @@ import threading
 import logging
 from datetime import datetime
 import os.path
+import av
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +38,15 @@ class StreamProcessor:
         self.is_file = os.path.isfile(input_source) if isinstance(input_source, str) else False
 
         # Processing parameters
-
-        # 1 frame per second since FPS is 20
-        self.detection_interval = config.get('detection_interval', 0.2)
         self.confidence_threshold = config.get('confidence_threshold', 0.5)
         # Lowered threshold for improved recall
         self.plate_confidence_threshold = config.get('plate_confidence_threshold', 0.3)
-        self.stream_frames_skip = config.get('stream_frames_skip', 2)
+        # Process every nth frame (default: 10)
+        self.process_every_n_frames = config.get('process_every_n_frames', 10)
 
         # Thread control
         self._running = False
         self.thread = None
-        self.capture = None
 
     @property
     def running(self):
@@ -70,93 +68,85 @@ class StreamProcessor:
         self._running = False
         if self.thread:
             self.thread.join(timeout=3.0)
-        if self.capture:
-            self.capture.release()
 
     def _process_video(self):
-        """Main processing loop for the video source (stream or file)."""
+        """Main processing loop for the video source (stream or file) using PyAV."""
         source_type = "video file" if self.is_file else "RTSP stream"
         logger.info(f"Opening {source_type}: {self.input_source}")
 
-        # Set up video capture
-        if self.is_file:
-            self.capture = cv2.VideoCapture(self.input_source)
-            # Get video properties for file mode
-            fps = self.capture.get(cv2.CAP_PROP_FPS)
-            total_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
-
-            # Calculate frame skip based on desired frame rate
-            # We want 1 frame per self.detection_interval seconds
-            # So we need to skip (fps * self.detection_interval - 1) frames between each processed frame
-            frames_to_skip = int(fps * self.detection_interval) - 1
-            if frames_to_skip < 0:
-                frames_to_skip = 0
-
-            logger.info(
-                f"Video has {total_frames} frames at {fps} FPS. "
-                f"Processing 1 frame every {self.detection_interval} seconds (skipping {frames_to_skip} "
-                "frames between each)."
-            )
-        else:
-            # OpenCV RTSP connection settings
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
-            self.capture = cv2.VideoCapture(self.input_source, cv2.CAP_FFMPEG)
-
-        if not self.capture.isOpened():
-            logger.error(f"Failed to open {source_type}")
-            self._running = False
-            return
-
-        frame_count = 0
-        frames_since_last_process = 0
-        frames_processed = 0
-
         while self._running:
-            # For streaming or file, first grab the frame
-            ret = self.capture.grab()
-            if not ret:
+            try:
+                # For RTSP streams, set options before opening
+                options = {}
+                if not self.is_file:
+                    options = {'rtsp_transport': 'udp', 'timeout': '5000000'}  # 5 seconds in microseconds
+
+                # Use PyAV to process the video
+                with av.open(self.input_source, options=options) as container:
+                    video_stream = container.streams.video[0]
+                    video_stream.thread_type = 'AUTO'  # Enable multithreading
+
+                    # Get video properties
+                    fps = getattr(video_stream, 'average_rate', None) or video_stream.framerate
+                    total_frames = video_stream.frames if video_stream.frames > 0 else None
+
+                    if self.is_file and total_frames:
+                        logger.info(
+                            f"Video has {total_frames} frames at {fps} FPS. "
+                            f"Processing every {self.process_every_n_frames}th frame."
+                        )
+                    else:
+                        logger.info(f"Stream FPS: {fps}. Processing every {self.process_every_n_frames}th frame.")
+
+                    frame_count = 0
+                    frames_processed = 0
+
+                    for frame in container.decode(video=0):
+                        if not self._running:
+                            break
+
+                        frame_count += 1
+
+                        # Process every nth frame (prioritizing I-frames when possible)
+                        if frame.key_frame or frame_count % self.process_every_n_frames == 0:
+                            # Convert PyAV frame to OpenCV format
+                            img = frame.to_ndarray(format='bgr24')
+
+                            # Process the frame
+                            try:
+                                timestamp = time.time()
+                                self._process_frame(img, timestamp, frame_count)
+                                frames_processed += 1
+
+                                frame_type = "I-frame" if frame.key_frame else "frame"
+                                if self.is_file and total_frames:
+                                    logger.info(
+                                        f"Processed {frame_type} {frame_count}/{total_frames} (#{frames_processed})"
+                                    )
+                                else:
+                                    logger.info(f"Processed {frame_type} (#{frames_processed})")
+                            except Exception as e:
+                                logger.error(f"Error processing frame {frame_count}: {e}")
+
+                    # If we're processing a file and reached the end
+                    if self.is_file:
+                        logger.info(f"Finished processing file. Total frames processed: {frames_processed}")
+                        self._running = False
+                        break
+                    else:
+                        # For streams, if we get here, we need to reconnect
+                        logger.warning("Stream ended. Attempting to reconnect...")
+                        time.sleep(3)  # Wait before reconnecting
+
+            except Exception as e:
+                logger.error(f"Error in video processing: {e}")
                 if self.is_file:
-                    logger.info("Reached end of video file")
                     self._running = False
                     break
                 else:
-                    logger.warning("Failed to read frame from stream")
-                    # Attempt to reconnect
-                    self.capture.release()
-                    time.sleep(2)
-                    self.capture = cv2.VideoCapture(self.input_source, cv2.CAP_FFMPEG)
-                    continue
-
-            frame_count += 1
-            frames_processed += 1
-
-            # For file mode, we still skip frames based on frames_to_skip
-            if self.is_file:
-                frames_since_last_process += 1
-                if frames_since_last_process <= frames_to_skip:
-                    continue
-                frames_since_last_process = 0
-            else:
-                # For streaming mode, skip frames based on stream_frames_skip
-                if frames_processed % self.stream_frames_skip != 0:
-                    continue
-
-            # Now retrieve the frame to process
-            ret, frame = self.capture.retrieve()
-            if not ret:
-                continue
-
-            # Process current frame
-            try:
-                self._process_frame(frame, time.time(), frame_count)
-                if self.is_file:
-                    logger.info(f"Processed frame {frame_count}/{total_frames}")
-            except Exception as e:
-                logger.error(f"Error processing frame {frame_count}: {e}")
-
-        # Clean up
-        if self.capture:
-            self.capture.release()
+                    # For streams, try to reconnect
+                    logger.warning(f"Connection error. Attempting to reconnect in 5 seconds...")
+                    time.sleep(5)
 
     def _process_frame(self, frame, timestamp, frame_count=None):
         """

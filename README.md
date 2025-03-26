@@ -19,6 +19,7 @@ A Python application for processing video streams and files to detect vehicles a
 - PyTorch
 - Ultralytics YOLOv8
 - EasyOCR
+- PyAV
 
 ## Installation
 
