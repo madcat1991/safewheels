@@ -3,6 +3,6 @@ numpy>=2.1.1
 torch>=2.6.0
 torchvision>=0.21.0
 ultralytics>=8.3.96
-easyocr>=1.7.2
+pytesseract>=0.3.13
 imutils>=0.5.4
 av>=14.2.0

@@ -1,20 +1,23 @@
 """
-License plate detection and character recognition using YOLOv8 for detection and EasyOCR for OCR.
+License plate detection and character recognition using YOLOv8 for detection and Tesseract OCR for OCR.
 Optimized for speed and accuracy with European license plates (primarily English and German).
 """
 import logging
 import cv2
 import re
+import numpy as np
 from ultralytics import YOLO
-import easyocr
+import pytesseract
+from pytesseract import Output
 
 logger = logging.getLogger(__name__)
 
 
 class PlateRecognizer:
     """
-    Detects and recognizes license plates using YOLOv8 for detection and EasyOCR for OCR.
+    Detects and recognizes license plates using YOLOv8 for detection and Tesseract OCR.
     Optimized for English and German license plates with fast processing.
+    Uses Tesseract's LSTM engine with specialized preprocessing for optimal performance.
     """
 
     def __init__(self, languages=None, gpu=True):
@@ -22,25 +25,38 @@ class PlateRecognizer:
         Initialize the license plate detector and character recognizer.
 
         Args:
-            languages: List of language codes for EasyOCR (default: ['en', 'de'])
-            gpu: Whether to use GPU for detection and recognition
+            languages: ISO 639-2 language codes for Tesseract (default: ['eng', 'deu'])
+            gpu: Whether to use GPU for detection
         """
         self.plate_detector = None
-        self.reader = None
         self.use_gpu = gpu
-        self.languages = languages or ['en', 'de']  # English and German only for faster processing
+        self.languages = languages or ['eng', 'deu']  # English and German only for faster processing
+        self.tesseract_config = '--oem 1 --psm 7'  # LSTM OCR Engine, treat image as single line
+
+        # Configure Tesseract language
+        self.tesseract_lang = '+'.join(self.languages)
+
+        # Initialize character confusions for post-processing
+        self.char_confusions = {
+            '0': 'O', 'O': '0',
+            '1': 'I', 'I': '1',
+            '8': 'B', 'B': '8',
+            '5': 'S', 'S': '5',
+            '2': 'Z', 'Z': '2'
+        }
+
         self._load_models()
 
         # Common license plate patterns (can be extended)
         self.plate_patterns = {
             'european': r'[A-ZÄÖÜ]{1,3}[-\s]?[0-9]{1,4}[-\s]?[A-ZÄÖÜß0-9]{1,3}',
             'german': r'[A-ZÄÖÜ]{1,3}[-\s]?[A-Z]{1,2}[-\s]?[0-9]{1,4}',  # Standard German format
-            'generic': r'[A-ZÄÖÜ0-9]{3,8}'  # Generic alphanumeric pattern
+            'generic': r'[A-ZÄÖÜ0-9]{3,10}'  # Generic alphanumeric pattern
         }
 
     def _load_models(self):
         """
-        Load the YOLOv8 model for license plate detection and EasyOCR.
+        Load the YOLOv8 model for license plate detection and verify Tesseract availability.
         """
         # Load YOLOv8 for license plate detection
         try:
@@ -50,16 +66,14 @@ class PlateRecognizer:
             logger.error(f"Failed to load license plate detection model: {e}")
             raise
 
-        # Initialize EasyOCR reader
+        # Verify Tesseract is available
         try:
-            # Initialize EasyOCR reader with specified languages
-            self.reader = easyocr.Reader(
-                self.languages,
-                gpu=self.use_gpu
-            )
-            logger.info(f"Initialized EasyOCR with languages: {self.languages}")
+            # Test Tesseract on a small empty image to verify it works
+            test_image = np.zeros((50, 200), dtype=np.uint8)
+            pytesseract.image_to_string(test_image)
+            logger.info(f"Verified Tesseract OCR availability with languages: {self.tesseract_lang}")
         except Exception as e:
-            logger.error(f"Failed to initialize EasyOCR: {e}")
+            logger.error(f"Failed to initialize Tesseract OCR: {e}")
             raise
 
     def detect_plate(self, vehicle_img, confidence_threshold=0.4):
@@ -151,56 +165,86 @@ class PlateRecognizer:
     def _preprocess_plate(self, plate_img):
         """
         Preprocess the license plate image for better character recognition.
+        Optimized for Tesseract OCR with minimal processing steps.
 
         Args:
             plate_img: Cropped license plate image
 
         Returns:
-            List of preprocessed images ready for OCR
+            Dictionary of preprocessed images with processing type as key
         """
         if plate_img is None:
-            return []
+            return {}
 
         try:
-            processed_images = []
+            processed_images = {}
 
             # Resize to appropriate size for OCR while maintaining aspect ratio
             height, width = plate_img.shape[:2]
-            new_width = 300  # Standard width that works well with OCR
+
+            # Tesseract works best with larger images than EasyOCR
+            new_width = 400  # Optimal width for Tesseract
             new_height = int(height * (new_width / width))
-            # AREA for downsampling
-            resized = cv2.resize(plate_img, (new_width, new_height), interpolation=cv2.INTER_AREA)
-            processed_images.append(resized)
 
-            # Convert to grayscale
+            # Ensure the height is at least 50px for better OCR results
+            if new_height < 50:
+                scale_factor = 50 / new_height
+                new_height = 50
+                new_width = int(new_width * scale_factor)
+
+            # Use INTER_CUBIC for upsampling to get sharper text edges
+            resized = cv2.resize(
+                plate_img,
+                (new_width, new_height),
+                interpolation=cv2.INTER_CUBIC
+            )
+            processed_images['resized'] = resized
+
+            # Convert to grayscale (essential for Tesseract)
             gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) > 2 else resized
+            processed_images['gray'] = gray
 
-            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+            # Apply CLAHE for better contrast
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(gray)
-            processed_images.append(enhanced)
+            processed_images['enhanced'] = enhanced
 
-            # Apply bilateral filter to reduce noise while preserving edges - faster parameters
-            bilateral = cv2.bilateralFilter(enhanced, 5, 50, 50)  # Smaller diameter for faster processing
-            processed_images.append(bilateral)
+            # Apply Gaussian blur to remove noise (works better with Tesseract)
+            # Very light blur that preserves edges better than bilateral for text
+            blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
+            processed_images['blurred'] = blurred
 
-            # Only create one threshold version - use Otsu as it's generally reliable
-            _, otsu = cv2.threshold(bilateral, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            processed_images.append(otsu)
+            # Otsu's thresholding for optimal binarization
+            _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            processed_images['binary'] = otsu
+
+            # Add adaptive thresholding which often works better for uneven lighting
+            adaptive = cv2.adaptiveThreshold(
+                blurred,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                11,
+                2
+            )
+            processed_images['adaptive'] = adaptive
 
             return processed_images
 
         except Exception as e:
             logger.error(f"Error during image preprocessing: {e}")
             # Return original image if preprocessing fails
-            return [plate_img]
+            if plate_img is not None and len(plate_img.shape) >= 2:
+                return {'original': plate_img}
+            return {}
 
-    def _clean_plate_text(self, text):
+    def _clean_plate_text(self, text, confidence_data=None):
         """
-        Clean and normalize license plate text.
+        Clean and normalize license plate text with improved character correction.
 
         Args:
             text: Raw text from OCR
+            confidence_data: Optional dict with character confidence values
 
         Returns:
             Cleaned license plate string
@@ -211,10 +255,15 @@ class PlateRecognizer:
         # Convert to uppercase
         text = text.upper()
 
-        # Remove spaces, dots, and other non-alphanumeric characters
-        text = re.sub(r'[\s\.,;:_\-\'\"\(\)\[\]\{\}]', '', text)
+        # Preserve dashes but remove other punctuation
+        # First, temporarily replace dashes with a special sequence
+        text = text.replace('-', '##DASH##')
 
-        # NOTE: These corrections are defined directly where they're used
+        # Remove spaces, dots, and other non-alphanumeric characters
+        text = re.sub(r'[\s\.,;:_\'\"\(\)\[\]\{\}]', '', text)
+
+        # Restore dashes
+        text = text.replace('##DASH##', '-')
 
         # Apply corrections only if the result looks like a plate
         # German plates typically start with 1-3 letters (city code) followed by separators and identifier
@@ -246,14 +295,34 @@ class PlateRecognizer:
                     logger.debug(f"Correcting city code: {first_part} -> {umlaut_corrections[first_part]}")
                     first_part = umlaut_corrections[first_part]
 
-                cleaned_text = first_part + rest_of_text
+                # For the rest of the text (after city code), apply opposite corrections
+                # In this part, letters are likely mistaken as digits (O→0, I→1)
+                # Identify the numeric portion at the end (if any)
+                rest_with_dashes = rest_of_text
+
+                # If there's a dash followed by digits at the end, apply specific corrections
+                num_part_match = re.search(r'-([A-Z0-9]+)$', rest_with_dashes)
+                if num_part_match:
+                    num_part = num_part_match.group(1)
+                    num_part_start = rest_with_dashes.rfind('-' + num_part)
+
+                    # Apply opposite corrections in the numeric part
+                    # In this part, change 'O' to '0', 'I' to '1', etc.
+                    corrected_num = num_part
+                    letter_to_digit = {'O': '0', 'I': '1', 'B': '8', 'S': '5', 'Z': '2'}
+                    for letter, digit in letter_to_digit.items():
+                        corrected_num = corrected_num.replace(letter, digit)
+
+                    rest_with_dashes = rest_with_dashes[:num_part_start+1] + corrected_num
+
+                cleaned_text = first_part + rest_with_dashes
             else:
                 cleaned_text = text
         else:
             cleaned_text = text
 
-        # Keep only alphanumeric characters including German umlauts (based on official German license plate standard)
-        allowed_chars = set('ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789')
+        # Keep only allowed characters including dash
+        allowed_chars = set('ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789-')
         cleaned_text = ''.join(c for c in cleaned_text if c in allowed_chars)
 
         # Check minimum length to be a valid plate
@@ -296,7 +365,7 @@ class PlateRecognizer:
 
     def recognize_characters(self, plate_img, confidence_threshold=0.3):
         """
-        Recognize characters on the license plate using EasyOCR.
+        Recognize characters on the license plate using Tesseract OCR.
 
         Args:
             plate_img: Cropped license plate image
@@ -310,52 +379,105 @@ class PlateRecognizer:
             return None, 0.0
 
         try:
-            # Preprocess the plate image for OCR
+            # Preprocess the plate image for OCR - returns a dictionary of processed images
             processed_images = self._preprocess_plate(plate_img)
             if not processed_images:
                 return None, 0.0
 
             all_results = []
+            allowed_chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789-'
 
-            # Recognize text in each processed image using two different methods
-            for img in processed_images:
+            # Configure tesseract with allowlist for license plate characters
+            # This restricts recognized characters to only those relevant for license plates
+            config = f'{self.tesseract_config} -c tessedit_char_whitelist="{allowed_chars}"'
+
+            # Process each image variant with Tesseract
+            for img_type, img in processed_images.items():
                 try:
-                    # Convert to RGB for EasyOCR if needed
-                    if len(img.shape) == 2:  # If grayscale
-                        img_for_ocr = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                    else:
-                        img_for_ocr = img
-
-                    # Fast method with greedy decoder only
-                    detection_results1 = self.reader.readtext(
-                        img_for_ocr,
-                        detail=1,  # Return bounding boxes and confidences
-                        paragraph=False,  # Treat each text box separately
-                        decoder='greedy',  # Greedy decoder is much faster
-                        allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789',  # Standard Latin and German characters
-                        batch_size=1,  # Process one image at a time
-                        mag_ratio=1.5,  # Moderate magnification ratio for speed
-                        canvas_size=1280,  # Smaller canvas size for faster processing
-                        contrast_ths=0.2,  # Lower contrast threshold for low contrast plates
-                        adjust_contrast=1.3  # Moderate contrast adjustment
+                    # Run Tesseract OCR with detailed output for confidence values
+                    ocr_result = pytesseract.image_to_data(
+                        img,
+                        lang=self.tesseract_lang,
+                        config=config,
+                        output_type=Output.DICT
                     )
 
-                    # We only use the greedy decoder for faster processing
+                    # Extract text and confidence values, handle empty results
+                    line_texts = [text for text in ocr_result['text'] if text.strip()]
+                    if not line_texts:
+                        continue
 
-                    # Process results from greedy decoder only (for speed)
-                    for box, text, confidence in detection_results1:
-                        if confidence >= confidence_threshold:
-                            # Skip very short segments that are likely part of another detection
-                            is_part = any(r[0].startswith(text) or r[0].endswith(text) for r in all_results)
-                            if len(text) <= 2 and is_part:
-                                continue
+                    # Calculate confidence as the average of word confidences
+                    # Skip empty and single character words as they're often noise
+                    valid_confidences = [
+                        conf for text, conf in
+                        zip(ocr_result['text'], ocr_result['conf'])
+                        if text.strip() and len(text.strip()) > 1
+                    ]
 
-                            cleaned_text = self._clean_plate_text(text)
-                            if cleaned_text:
-                                all_results.append((cleaned_text, confidence, "easyocr"))
+                    if not valid_confidences:
+                        continue
+
+                    avg_confidence = sum(valid_confidences) / len(valid_confidences) / 100.0
+
+                    # Combine all detected text in this image (for multi-line detection)
+                    combined_text = ' '.join(line_texts)
+
+                    # Some basic filtering
+                    if len(combined_text) < 2:
+                        continue
+
+                    # Clean and normalize the plate text
+                    cleaned_text = self._clean_plate_text(combined_text)
+
+                    if cleaned_text:
+                        # Track which preprocessing method gave us this result
+                        all_results.append((cleaned_text, avg_confidence, f"tesseract-{img_type}"))
 
                 except Exception as e:
-                    logger.debug(f"EasyOCR error on image: {e}")
+                    logger.debug(f"Tesseract error on {img_type} image: {e}")
+
+                # Try a second approach with slightly different parameters for plates with more text
+                try:
+                    # Try with PSM 6 (Assume a single uniform block of text)
+                    alt_config = f'--oem 1 --psm 6 -c tessedit_char_whitelist="{allowed_chars}"'
+
+                    alt_result = pytesseract.image_to_string(
+                        img,
+                        lang=self.tesseract_lang,
+                        config=alt_config
+                    ).strip()
+
+                    if alt_result and len(alt_result) >= 3:
+                        # Use a default confidence since we don't have detailed info
+                        default_conf = 0.7
+
+                        # Clean the text
+                        cleaned_alt = self._clean_plate_text(alt_result)
+                        if cleaned_alt:
+                            # Add as a separate result with different method tag
+                            all_results.append((cleaned_alt, default_conf, f"tesseract-alt-{img_type}"))
+
+                except Exception as e:
+                    logger.debug(f"Alternate Tesseract approach error: {e}")
+
+            # If no results at all, try a last-ditch attempt with the original image
+            if not all_results and 'original' in processed_images:
+                try:
+                    # Use a simple approach for the original image
+                    fallback_result = pytesseract.image_to_string(
+                        processed_images['original'],
+                        lang=self.tesseract_lang,
+                        config='--oem 1 --psm 8'  # Treat as a single word
+                    ).strip()
+
+                    if fallback_result:
+                        cleaned_fallback = self._clean_plate_text(fallback_result)
+                        if cleaned_fallback:
+                            all_results.append((cleaned_fallback, 0.5, "tesseract-fallback"))
+
+                except Exception as e:
+                    logger.debug(f"Fallback Tesseract error: {e}")
 
             # Filter by confidence threshold
             valid_results = [r for r in all_results if r[1] >= confidence_threshold]

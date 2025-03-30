@@ -7,8 +7,8 @@ A Python application for processing video streams and files to detect vehicles a
 - Process RTSP camera streams or video files
 - Vehicle detection using YOLOv8
 - License plate detection using a [pre-trained](https://github.com/Muhammad-Zeerak-Khan/Automatic-License-Plate-Recognition-using-YOLOv8) YOLOv8 model
-- License plate recognition using EasyOCR with multi-language support (English, German)
-- Fast processing (average 0.24s per image)
+- License plate recognition using Tesseract OCR with multi-language support (English, German)
+- Fast processing with optimized preprocessing pipeline
 - Groups multiple images of the same vehicle to improve recognition accuracy
 - Stores vehicle images and plate information for later review
 
@@ -18,8 +18,29 @@ A Python application for processing video streams and files to detect vehicles a
 - OpenCV
 - PyTorch
 - Ultralytics YOLOv8
-- EasyOCR
+- Tesseract OCR 5.x
 - PyAV
+
+### Tesseract OCR Installation
+
+Tesseract OCR is required and must be installed separately:
+
+#### macOS:
+```
+brew install tesseract
+brew install tesseract-lang  # for language support
+```
+
+#### Ubuntu/Debian:
+```
+sudo apt-get update
+sudo apt-get install tesseract-ocr
+sudo apt-get install tesseract-ocr-eng tesseract-ocr-deu  # for English and German
+```
+
+#### Windows:
+1. Download and install from: https://github.com/UB-Mannheim/tesseract/wiki
+2. Add the Tesseract installation directory to your PATH
 
 ## Installation
 
@@ -34,7 +55,7 @@ A Python application for processing video streams and files to detect vehicles a
    pip install -r requirements.txt
    ```
 
-   This will install all necessary packages including EasyOCR.
+   This will install all necessary Python packages including pytesseract (Python wrapper for Tesseract OCR).
 
 ## Configuration
 
