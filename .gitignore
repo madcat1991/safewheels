@@ -39,6 +39,7 @@ ENV/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+*.ipynb
 
 # Local configuration
 config.local.py

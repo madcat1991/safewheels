@@ -516,8 +516,9 @@ class PlateRecognizer:
             ocr_confidence_threshold: Minimum confidence for character recognition
 
         Returns:
-            Tuple of (plate_img, plate_number, confidence)
-            If no plate is detected or recognized, returns (None, None, 0.0)
+            Tuple of (plate_img, plate_number, plate_confidence, ocr_confidence)
+            If no plate is detected, returns (None, None, 0.0, 0.0)
+            If plate is detected but no characters recognized, returns (plate_img, None, plate_confidence, 0.0)
         """
         try:
             # Detect license plate
@@ -525,27 +526,26 @@ class PlateRecognizer:
                 vehicle_img, confidence_threshold)
 
             if plate_img is None:
-                return None, None, 0.0
+                return None, None, 0.0, 0.0
 
             # Recognize characters on the plate
             plate_number, ocr_confidence = self.recognize_characters(
                 plate_img, ocr_confidence_threshold)
 
-            # Calculate overall confidence
             if plate_number:
-                # Combine plate detection and OCR confidences (weighted average)
-                confidence = 0.4 * plate_confidence + 0.6 * ocr_confidence
-
                 # Log the successful detection and recognition
-                logger.info(f"Recognized license plate: {plate_number} with confidence {confidence:.2f}")
+                logger.info(
+                    f"Recognized license plate: {plate_number} "
+                    f"(plate detection: {plate_confidence:.2f}, OCR: {ocr_confidence:.2f})"
+                )
             else:
-                # If characters weren't recognized, return just the plate confidence
+                # If characters weren't recognized
                 plate_number = None
-                confidence = plate_confidence
-                logger.debug("License plate detected but characters not recognized")
+                ocr_confidence = 0.0
+                logger.debug(f"License plate detected (conf: {plate_confidence:.2f}) but characters not recognized")
 
-            return plate_img, plate_number, confidence
+            return plate_img, plate_number, plate_confidence, ocr_confidence
 
         except Exception as e:
             logger.error(f"Error during license plate recognition: {e}")
-            return None, None, 0.0
+            return None, None, 0.0, 0.0

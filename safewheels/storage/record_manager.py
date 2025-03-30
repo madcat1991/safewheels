@@ -36,11 +36,13 @@ class RecordManager:
         self.csv_file = os.path.join(storage_path, "detections.csv")
         self.csv_headers = [
             "timestamp",
-            "datetime",
+            "datetime_ms",
             "vehicle_img",
+            "vehicle_confidence",
             "plate_img",
+            "plate_detection_confidence",
             "plate_number",
-            "confidence",
+            "ocr_confidence",
             "frame_number"
         ]
 
@@ -60,17 +62,19 @@ class RecordManager:
             except Exception as e:
                 logger.error(f"Error creating CSV file: {e}")
 
-    def add_detection(self, timestamp, vehicle_img, plate_img=None,
-                      plate_number=None, confidence=0.0, frame_number=None):
+    def add_detection(self, timestamp, vehicle_img, vehicle_confidence=0.0, plate_img=None,
+                      plate_detection_confidence=0.0, plate_number=None, ocr_confidence=0.0, frame_number=None):
         """
         Add a new vehicle detection record and save associated images.
 
         Args:
             timestamp: Detection time
             vehicle_img: Image of the detected vehicle
+            vehicle_confidence: Confidence score for the vehicle detection
             plate_img: Image of the license plate (or None if not detected)
+            plate_detection_confidence: Confidence score for plate detection
             plate_number: Recognized license plate text (or None if not recognized)
-            confidence: Confidence score for the plate recognition
+            ocr_confidence: Confidence score for the OCR recognition
             frame_number: Optional frame number (for video file processing)
         """
         # Generate filename with timestamp and recognition type
@@ -91,11 +95,13 @@ class RecordManager:
         # Create detection record
         detection = {
             "timestamp": timestamp,
-            "datetime": datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S"),
+            "datetime_ms": datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f"),
             "vehicle_img": vehicle_filename,
+            "vehicle_confidence": vehicle_confidence,
             "plate_img": plate_filename,
+            "plate_detection_confidence": plate_detection_confidence,
             "plate_number": plate_number if plate_number else "",
-            "confidence": confidence,
+            "ocr_confidence": ocr_confidence,
             "frame_number": frame_number if frame_number is not None else ""
         }
 
@@ -104,9 +110,9 @@ class RecordManager:
 
         # Log the detection
         if plate_number:
-            logger.info(f"Saved detection with plate {plate_number} (confidence: {confidence:.2f})")
+            logger.info(f"Saved detection with plate {plate_number} (OCR confidence: {ocr_confidence:.2f})")
         else:
-            logger.info("Saved detection without plate recognition")
+            logger.info(f"Saved vehicle detection (confidence: {vehicle_confidence:.2f})")
 
         # Ensure we don't exceed max images
         self._enforce_storage_limit()

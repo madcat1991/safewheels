@@ -37,12 +37,18 @@ class StreamProcessor:
         # Determine if source is a video file or a stream
         self.is_file = os.path.isfile(input_source) if isinstance(input_source, str) else False
 
-        # Processing parameters
-        self.confidence_threshold = config.get('confidence_threshold', 0.5)
-        # Lowered threshold for improved recall
-        self.plate_confidence_threshold = config.get('plate_confidence_threshold', 0.3)
-        # Process every nth frame (default: 10)
+        # Processing parameters - thresholds for each stage of detection/recognition
+        self.vehicle_confidence_threshold = config.get('vehicle_confidence_threshold', 0.4)
+        self.plate_detection_threshold = config.get('plate_detection_threshold', 0.3)
+        self.ocr_confidence_threshold = config.get('ocr_confidence_threshold', 0.2)
+
+        # Process every nth frame (default: 5)
         self.process_every_n_frames = config.get('process_every_n_frames', 5)
+
+        logger.info(
+            f"Detection thresholds: vehicle={self.vehicle_confidence_threshold}, " +
+            f"license_plate={self.plate_detection_threshold}, ocr={self.ocr_confidence_threshold}"
+        )
 
         # Thread control
         self._running = False
@@ -79,12 +85,31 @@ class StreamProcessor:
                 # For RTSP streams, set options before opening
                 options = {}
                 if not self.is_file:
-                    options = {'rtsp_transport': 'udp', 'timeout': '5000000'}  # 5 seconds in microseconds
+                    # Options for RTSP streams:
+                    # - rtsp_transport: Use 'tcp' for more reliable streams over 'udp' if experiencing issues
+                    # - timeout: Timeout in microseconds
+                    # - max_delay: Maximum delay in microseconds before frames are dropped
+                    # - skip_frame: Skip frames in case of decoding errors
+                    options = {
+                        # Use the transport protocol that works best (will auto-switch if errors persist)
+                        'rtsp_transport': getattr(self, '_rtsp_transport', 'tcp'),
+                        'stimeout': '5000000',  # Socket timeout in microseconds (5 seconds)
+                        'max_delay': '500000',  # 500ms max delay
+                        'skip_frame': '1',  # Skip non-reference frames on errors
+                        'fflags': 'nobuffer+genpts+discardcorrupt',  # Don't buffer frames, generate timestamps if missing
+                        'flags': 'low_delay',  # Low latency mode
+                        'analyzeduration': '1000000'  # Analyze duration in microseconds (1 second)
+                    }
 
                 # Use PyAV to process the video
                 with av.open(self.input_source, options=options) as container:
                     video_stream = container.streams.video[0]
                     video_stream.thread_type = 'AUTO'  # Enable multithreading
+
+                    # Log codec information for debugging
+                    codec_name = video_stream.codec_context.name
+                    logger.info(f"Video codec: {codec_name}, " +
+                               f"width: {video_stream.width}, height: {video_stream.height}")
 
                     # Get video properties
                     fps = getattr(video_stream, 'average_rate', None) or video_stream.framerate
@@ -101,32 +126,45 @@ class StreamProcessor:
                     frame_count = 0
                     frames_processed = 0
 
-                    for frame in container.decode(video=0):
+                    # Use non-strict decoding to handle problematic H.265 streams
+                    for packet in container.demux(video=0):
                         if not self._running:
                             break
 
-                        frame_count += 1
+                        if packet.dts is None:
+                            # Skip packets without timestamps
+                            continue
 
-                        # Process every nth frame (prioritizing I-frames when possible)
-                        if frame.key_frame or frame_count % self.process_every_n_frames == 0:
-                            # Convert PyAV frame to OpenCV format
-                            img = frame.to_ndarray(format='bgr24')
+                        try:
+                            for frame in packet.decode():
+                                if not self._running:
+                                    break
 
-                            # Process the frame
-                            try:
-                                timestamp = time.time()
-                                self._process_frame(img, timestamp, frame_count)
-                                frames_processed += 1
+                                frame_count += 1
 
-                                frame_type = "I-frame" if frame.key_frame else "frame"
-                                if self.is_file and total_frames:
-                                    logger.info(
-                                        f"Processed {frame_type} {frame_count}/{total_frames} (#{frames_processed})"
-                                    )
-                                else:
-                                    logger.info(f"Processed {frame_type} (#{frames_processed})")
-                            except Exception as e:
-                                logger.error(f"Error processing frame {frame_count}: {e}")
+                                # Process every nth frame (prioritizing I-frames when possible)
+                                if frame.key_frame or frame_count % self.process_every_n_frames == 0:
+                                    try:
+                                        # Convert PyAV frame to OpenCV format
+                                        img = frame.to_ndarray(format='bgr24')
+
+                                        # Process the frame
+                                        timestamp = time.time()
+                                        self._process_frame(img, timestamp, frame_count)
+                                        frames_processed += 1
+
+                                        frame_type = "I-frame" if frame.key_frame else "frame"
+                                        if self.is_file and total_frames:
+                                            logger.info(
+                                                f"Processed {frame_type} {frame_count}/{total_frames} (#{frames_processed})"
+                                            )
+                                        else:
+                                            logger.info(f"Processed {frame_type} (#{frames_processed})")
+                                    except Exception as e:
+                                        logger.error(f"Error processing frame {frame_count}: {e}")
+                        except av.AVError as e:
+                            # Handle decoding errors for this packet but continue with next
+                            logger.warning(f"Decoding error in frame {frame_count}: {e} - skipping packet")
 
                     # If we're processing a file and reached the end
                     if self.is_file:
@@ -138,14 +176,44 @@ class StreamProcessor:
                         logger.warning("Stream ended. Attempting to reconnect...")
                         time.sleep(3)  # Wait before reconnecting
 
+            except av.AVError as e:
+                logger.error(f"Video decoding error: {e}")
+                if self.is_file:
+                    self._running = False
+                    break
+                else:
+                    # For streams, try to reconnect with increasing backoff
+                    retry_delay = min(10, (self._retry_count if hasattr(self, '_retry_count') else 0) + 3)
+                    self._retry_count = retry_delay - 2  # Store for next time
+
+                    if 'End of file' in str(e):
+                        logger.warning(f"Stream ended. Attempting to reconnect in {retry_delay} seconds...")
+                    else:
+                        logger.warning(f"RTSP connection error: {e}. Reconnecting in {retry_delay} seconds...")
+
+                    # Try switching transport protocol on persistent errors
+                    # If we're using TCP, try UDP next time and vice versa
+                    if hasattr(self, '_rtsp_connection_errors'):
+                        self._rtsp_connection_errors += 1
+                        if self._rtsp_connection_errors > 3:
+                            current_transport = options.get('rtsp_transport', 'tcp')
+                            new_transport = 'udp' if current_transport == 'tcp' else 'tcp'
+                            logger.info(f"Switching RTSP transport from {current_transport} to {new_transport}")
+                            self._rtsp_transport = new_transport
+                            self._rtsp_connection_errors = 0
+                    else:
+                        self._rtsp_connection_errors = 1
+                        self._rtsp_transport = options.get('rtsp_transport', 'tcp')
+
+                    time.sleep(retry_delay)
             except Exception as e:
                 logger.error(f"Error in video processing: {e}")
                 if self.is_file:
                     self._running = False
                     break
                 else:
-                    # For streams, try to reconnect
-                    logger.warning("Connection error. Attempting to reconnect in 5 seconds...")
+                    # For streams, retry for general errors
+                    logger.warning(f"Unexpected error: {e}. Attempting to reconnect in 5 seconds...")
                     time.sleep(5)
 
     def _process_frame(self, frame, timestamp, frame_count=None):
@@ -158,7 +226,7 @@ class StreamProcessor:
             frame_count: Frame number (for video files)
         """
         # Detect vehicles
-        vehicles = self.vehicle_detector.detect(frame, self.confidence_threshold)
+        vehicles = self.vehicle_detector.detect(frame, self.vehicle_confidence_threshold)
 
         if not vehicles:
             return
@@ -173,19 +241,26 @@ class StreamProcessor:
             vehicle_img = self._crop_vehicle(frame, vehicle)
             vehicle_img = self._sharpen_image(vehicle_img)
 
+            # Get vehicle detection confidence
+            vehicle_confidence = vehicle['confidence']
+
             # Attempt license plate recognition
-            plate_img, plate_number, confidence = self.plate_recognizer.recognize(
+            # Now returns separate confidences for plate detection and OCR
+            plate_img, plate_number, plate_detection_confidence, ocr_confidence = self.plate_recognizer.recognize(
                 vehicle_img,
-                self.plate_confidence_threshold
+                self.plate_detection_threshold,
+                self.ocr_confidence_threshold
             )
 
-            # Store the detection
+            # Store the detection with detailed confidence values
             self.record_manager.add_detection(
                 timestamp=timestamp,
                 vehicle_img=vehicle_img,
+                vehicle_confidence=vehicle_confidence,
                 plate_img=plate_img if plate_img is not None else None,
+                plate_detection_confidence=plate_detection_confidence,
                 plate_number=plate_number,
-                confidence=confidence,
+                ocr_confidence=ocr_confidence,
                 frame_number=frame_count
             )
 
