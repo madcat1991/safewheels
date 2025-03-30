@@ -96,7 +96,8 @@ class StreamProcessor:
                         'stimeout': '5000000',  # Socket timeout in microseconds (5 seconds)
                         'max_delay': '500000',  # 500ms max delay
                         'skip_frame': '1',  # Skip non-reference frames on errors
-                        'fflags': 'nobuffer+genpts+discardcorrupt',  # Don't buffer frames, generate timestamps if missing
+                        # Don't buffer frames, generate timestamps if missing
+                        'fflags': 'nobuffer+genpts+discardcorrupt',
                         'flags': 'low_delay',  # Low latency mode
                         'analyzeduration': '1000000'  # Analyze duration in microseconds (1 second)
                     }
@@ -108,8 +109,10 @@ class StreamProcessor:
 
                     # Log codec information for debugging
                     codec_name = video_stream.codec_context.name
-                    logger.info(f"Video codec: {codec_name}, " +
-                               f"width: {video_stream.width}, height: {video_stream.height}")
+                    logger.info(
+                        f"Video codec: {codec_name}, "
+                        f"width: {video_stream.width}, height: {video_stream.height}"
+                    )
 
                     # Get video properties
                     fps = getattr(video_stream, 'average_rate', None) or video_stream.framerate
@@ -156,7 +159,8 @@ class StreamProcessor:
                                         frame_type = "I-frame" if frame.key_frame else "frame"
                                         if self.is_file and total_frames:
                                             logger.info(
-                                                f"Processed {frame_type} {frame_count}/{total_frames} (#{frames_processed})"
+                                                f"Processed {frame_type} {frame_count}/{total_frames} "
+                                                f"(#{frames_processed})"
                                             )
                                         else:
                                             logger.info(f"Processed {frame_type} (#{frames_processed})")

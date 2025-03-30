@@ -11,24 +11,26 @@ import easyocr
 logger = logging.getLogger(__name__)
 
 
-class PlateRecognizer:
+MIN_PLATE_LEN = 2
+
+
+class DePlateRecognizer:
     """
     Detects and recognizes license plates using YOLOv8 for detection and EasyOCR for OCR.
-    Optimized for English and German license plates with fast processing.
+    Optimized for German license plates with fast processing.
     """
 
-    def __init__(self, languages=None, gpu=True):
+    def __init__(self, gpu=True):
         """
         Initialize the license plate detector and character recognizer.
 
         Args:
-            languages: List of language codes for EasyOCR (default: ['en', 'de'])
             gpu: Whether to use GPU for detection and recognition
         """
         self.plate_detector = None
         self.reader = None
         self.use_gpu = gpu
-        self.languages = languages or ['en', 'de']  # English and German only for faster processing
+        self.languages = ['de']
 
         # Character confusion maps for text correction
         self.digit_to_letter = {'0': 'O', '1': 'I', '8': 'B', '5': 'S', '2': 'Z'}
@@ -36,20 +38,48 @@ class PlateRecognizer:
 
         # Common German city codes with umlauts
         self.umlaut_corrections = {
-            'MU': 'MÜ',  # München
-            'LO': 'LÖ',  # Lörrach
-            'TU': 'TÜ',  # Tübingen
-            'FU': 'FÜ',  # Fürth
-            'GO': 'GÖ',  # Göttingen
-            'KO': 'KÖ',  # Köln area districts
+            "AO": "AÖ",  # Altötting
+            "BUD": "BÜD",  # Büdingen
+            "BUR": "BÜR",  # Büren
+            "BUS": "BÜS",  # Büsingen
+            "BUZ": "BÜZ",  # Bützow
+            "DUW": "DÜW",  # Bad Dürkheim an der Weinstraße
+            "FLO": "FLÖ",  # Flöha
+            "FU": "FÜ",  # Fürth
+            "FUS": "FÜS",  # Füssen
+            "GU": "GÜ",  # Güstrow
+            "HMU": "HÜM",  # Hann. Münden
+            "HOS": "HÖS",  # Höchstadt
+            "JUL": "JÜL",  # Jülich
+            "KON": "KÖN",  # Bad Königshofen
+            "KOT": "KÖT",  # Köthen
+            "KOZ": "KÖZ",  # Bad Kötzting
+            "KUN": "KÜN",  # Künzelsau
+            "LO": "LÖ",  # Lörrach
+            "LOB": "LÖB",  # Löbau
+            "LUN": "LÜN",  # Lünen
+            "MU": "MÜ",  # Mühldorf
+            "MUB": "MÜB",  # Münchberg
+            "MUR": "MÜR",  # Müritz
+            "NO": "NÖ",  # Nördlingen
+            "PLO": "PLÖ",  # Plön
+            "PRU": "PRÜ",  # Prüm
+            "RUD": "RÜD",  # Rüdesheim
+            "RUG": "RÜG",  # Rügen
+            "SAK": "SÄK",  # Bad Säckingen
+            "SLU": "SLÜ",  # Schlüchtern
+            "SMU": "SMÜ",  # Schwabmünchen
+            "SOM": "SÖM",  # Sömmerda
+            "SUW": "SÜW",  # Südliche Weinstraße
+            "TOL": "TÖL",  # Bad Tölz
+            "TU": "TÜ",  # Tübingen
+            "UB": "ÜB",  # Überlingen
+            "WU": "WÜ",  # Würzburg
+            "WUM": "WÜM",  # Waldmünchen
         }
 
         # Common license plate patterns
-        self.plate_patterns = {
-            'european': r'[A-ZÄÖÜ]{1,3}[-\s]?[0-9]{1,4}[-\s]?[A-ZÄÖÜß0-9]{1,3}',
-            'german': r'[A-ZÄÖÜ]{1,3}[-\s]?[A-Z]{1,2}[-\s]?[0-9]{1,4}',  # Standard German format
-            'generic': r'[A-ZÄÖÜ0-9]{3,10}'  # Generic alphanumeric pattern
-        }
+        self.plate_pattern = r'^(?:[A-ZÄÖÜ]{1,3}[-\s]?[A-Z]{1,2}[-\s]?\d{1,4}[HE]?|[0,1]-\d{1,5}|Y-\d{1,6})$'
 
         self._load_models()
 
@@ -76,7 +106,7 @@ class PlateRecognizer:
             logger.error(f"Failed to initialize EasyOCR: {e}")
             raise
 
-    def detect_plate(self, vehicle_img, confidence_threshold=0.4):
+    def detect_plate(self, vehicle_img, confidence_threshold):
         """
         Detect license plate in a vehicle image using YOLOv8.
 
@@ -253,16 +283,6 @@ class PlateRecognizer:
         # Convert to uppercase
         text = text.upper()
 
-        # Preserve dashes but remove other punctuation
-        # First, temporarily replace dashes with a special sequence
-        text = text.replace('-', '##DASH##')
-
-        # Remove spaces, dots, and other non-alphanumeric characters
-        text = re.sub(r'[\s\.,;:_\'\"\(\)\[\]\{\}]', '', text)
-
-        # Restore dashes
-        text = text.replace('##DASH##', '-')
-
         # Apply corrections only if the result looks like a plate
         # German plates typically start with 1-3 letters (city code) followed by separators and identifier
         if re.match(r'^[A-ZÄÖÜ0-9]{1,3}[-\s]?', text):
@@ -272,9 +292,10 @@ class PlateRecognizer:
                 first_part = first_part_match.group(1)
                 rest_of_text = text[len(first_part):]
 
-                # First handle digit corrections in the city code
-                for digit, letter in self.digit_to_letter.items():
-                    first_part = first_part.replace(digit, letter)
+                # First handle digit corrections in the city code (except for '0' and '1')
+                if first_part not in ('0', '1'):
+                    for digit, letter in self.digit_to_letter.items():
+                        first_part = first_part.replace(digit, letter)
 
                 # Apply the umlaut correction if this is a known city code
                 if first_part in self.umlaut_corrections:
@@ -301,12 +322,8 @@ class PlateRecognizer:
         else:
             cleaned_text = text
 
-        # Keep only allowed characters including dash
-        allowed_chars = set('ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789-')
-        cleaned_text = ''.join(c for c in cleaned_text if c in allowed_chars)
-
         # Check minimum length to be a valid plate
-        if len(cleaned_text) < 3:
+        if len(cleaned_text) < MIN_PLATE_LEN:
             return None
 
         return cleaned_text
@@ -321,35 +338,21 @@ class PlateRecognizer:
         Returns:
             Boolean indicating if text pattern matches a license plate
         """
-        if not plate_text or len(plate_text) < 3:
+        if not plate_text or len(plate_text) < MIN_PLATE_LEN:
             return False
 
         # Check against known patterns
-        for pattern in self.plate_patterns.values():
-            if re.match(pattern, plate_text):
-                return True
-
-        # General pattern: Check if the text contains at least some letters and digits
-        letters = sum(1 for c in plate_text if c.isalpha())
-        digits = sum(1 for c in plate_text if c.isdigit())
-
-        # Most license plates have at least 1 letter and 1 digit
-        if letters >= 1 and digits >= 1 and 4 <= len(plate_text) <= 8:
-            return True
-
-        # Special case: Full numeric plates (rare but exist)
-        if digits >= 3 and len(plate_text) >= 3 and len(plate_text) <= 8:
+        if re.match(self.plate_pattern, plate_text):
             return True
 
         return False
 
-    def _run_ocr_on_image(self, img, confidence_threshold, allowed_chars, use_beam_search=False):
+    def _run_ocr_on_image(self, img, allowed_chars, use_beam_search=False):
         """
         Run OCR on a single preprocessed image.
 
         Args:
             img: Image to process
-            confidence_threshold: Minimum confidence for character recognition
             allowed_chars: String of allowed characters
             use_beam_search: Whether to use beam search decoder (slower but more accurate)
 
@@ -413,54 +416,45 @@ class PlateRecognizer:
             for img_type, img in processed_images.items():
                 # Run OCR with greedy decoder (faster)
                 detection_results = self._run_ocr_on_image(
-                    img, confidence_threshold, allowed_chars, use_beam_search=False
+                    img, allowed_chars, use_beam_search=False
                 )
 
                 # Process results
                 for box, text, confidence in detection_results:
                     if confidence >= confidence_threshold:
-                        # Skip very short segments that are likely part of another detection
-                        is_part = any(r[0].startswith(text) or r[0].endswith(text) for r in all_results)
-                        if len(text) <= 2 and is_part:
-                            continue
-
                         cleaned_text = self._clean_plate_text(text)
                         if cleaned_text:
                             all_results.append((cleaned_text, confidence, f"easyocr-{img_type}"))
 
+            if len(all_results) <= 1:
                 # Try with beam search for higher accuracy on challenging plates
-                if img_type in ['enhanced', 'binary', 'adaptive']:
-                    beam_results = self._run_ocr_on_image(
-                        img, confidence_threshold, allowed_chars, use_beam_search=True
-                    )
-
-                    for box, text, confidence in beam_results:
-                        if confidence >= confidence_threshold:
-                            cleaned_text = self._clean_plate_text(text)
-                            if cleaned_text:
-                                # Check if this is a new or better result
-                                existing = next((r for r in all_results if r[0] == cleaned_text), None)
-                                if existing is None or confidence > existing[1]:
+                for img_type in ['enhanced', 'binary', 'adaptive']:
+                    img = processed_images.get(img_type)
+                    if img is not None:
+                        beam_results = self._run_ocr_on_image(
+                            img, allowed_chars, use_beam_search=True
+                        )
+                        for box, text, confidence in beam_results:
+                            if confidence >= confidence_threshold:
+                                cleaned_text = self._clean_plate_text(text)
+                                if cleaned_text:
                                     all_results.append((cleaned_text, confidence, f"easyocr-beam-{img_type}"))
 
-            # Filter by confidence threshold
-            valid_results = [r for r in all_results if r[1] >= confidence_threshold]
-
-            if not valid_results:
+            if len(all_results) == 0:
                 logger.debug(f"No text with confidence >= {confidence_threshold} detected")
                 return None, 0.0
 
             # Order by confidence
-            valid_results.sort(key=lambda x: x[1], reverse=True)
+            all_results.sort(key=lambda x: x[1], reverse=True)
 
             # Find the first valid license plate format
-            for text, conf, method in valid_results:
+            for text, conf, method in all_results:
                 if self._is_valid_plate(text):
                     logger.debug(f"Valid plate detected: {text} (conf: {conf:.2f}, method: {method})")
                     return text, conf
 
             # If no valid plates, return the highest confidence result
-            best_result = valid_results[0]
+            best_result = all_results[0]
             logger.debug(
                 f"Best plate candidate: {best_result[0]} (conf: {best_result[1]:.2f}, method: {best_result[2]})"
             )

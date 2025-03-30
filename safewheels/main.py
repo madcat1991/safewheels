@@ -9,7 +9,7 @@ import os.path
 
 from safewheels.stream_processor import StreamProcessor
 from safewheels.models.detector import VehicleDetector
-from safewheels.models.plate_recognizer import PlateRecognizer
+from safewheels.models.plate_recognizer import DePlateRecognizer
 from safewheels.storage.record_manager import RecordManager
 from safewheels.utils.config import load_config
 
@@ -60,7 +60,7 @@ def main():
 
     # Initialize components
     vehicle_detector = VehicleDetector()
-    plate_recognizer = PlateRecognizer()
+    plate_recognizer = DePlateRecognizer()
     record_manager = RecordManager(
         storage_path=config.get('storage_path', 'data/vehicles'),
         max_stored_images=config.get('max_stored_images', 1000)
