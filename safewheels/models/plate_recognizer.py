@@ -1,23 +1,20 @@
 """
-License plate detection and character recognition using YOLOv8 for detection and Tesseract OCR for OCR.
+License plate detection and character recognition using YOLOv8 for detection and EasyOCR for OCR.
 Optimized for speed and accuracy with European license plates (primarily English and German).
 """
 import logging
 import cv2
 import re
-import numpy as np
 from ultralytics import YOLO
-import pytesseract
-from pytesseract import Output
+import easyocr
 
 logger = logging.getLogger(__name__)
 
 
 class PlateRecognizer:
     """
-    Detects and recognizes license plates using YOLOv8 for detection and Tesseract OCR.
+    Detects and recognizes license plates using YOLOv8 for detection and EasyOCR for OCR.
     Optimized for English and German license plates with fast processing.
-    Uses Tesseract's LSTM engine with specialized preprocessing for optimal performance.
     """
 
     def __init__(self, languages=None, gpu=True):
@@ -25,16 +22,13 @@ class PlateRecognizer:
         Initialize the license plate detector and character recognizer.
 
         Args:
-            languages: ISO 639-2 language codes for Tesseract (default: ['eng', 'deu'])
-            gpu: Whether to use GPU for detection
+            languages: List of language codes for EasyOCR (default: ['en', 'de'])
+            gpu: Whether to use GPU for detection and recognition
         """
         self.plate_detector = None
+        self.reader = None
         self.use_gpu = gpu
-        self.languages = languages or ['eng', 'deu']  # English and German only for faster processing
-        self.tesseract_config = '--oem 1 --psm 7'  # LSTM OCR Engine, treat image as single line
-
-        # Configure Tesseract language
-        self.tesseract_lang = '+'.join(self.languages)
+        self.languages = languages or ['en', 'de']  # English and German only for faster processing
 
         # Initialize character confusions for post-processing
         self.char_confusions = {
@@ -56,7 +50,7 @@ class PlateRecognizer:
 
     def _load_models(self):
         """
-        Load the YOLOv8 model for license plate detection and verify Tesseract availability.
+        Load the YOLOv8 model for license plate detection and initialize EasyOCR.
         """
         # Load YOLOv8 for license plate detection
         try:
@@ -66,14 +60,16 @@ class PlateRecognizer:
             logger.error(f"Failed to load license plate detection model: {e}")
             raise
 
-        # Verify Tesseract is available
+        # Initialize EasyOCR reader
         try:
-            # Test Tesseract on a small empty image to verify it works
-            test_image = np.zeros((50, 200), dtype=np.uint8)
-            pytesseract.image_to_string(test_image)
-            logger.info(f"Verified Tesseract OCR availability with languages: {self.tesseract_lang}")
+            # Initialize EasyOCR reader with specified languages
+            self.reader = easyocr.Reader(
+                self.languages,
+                gpu=self.use_gpu
+            )
+            logger.info(f"Initialized EasyOCR with languages: {self.languages}")
         except Exception as e:
-            logger.error(f"Failed to initialize Tesseract OCR: {e}")
+            logger.error(f"Failed to initialize EasyOCR: {e}")
             raise
 
     def detect_plate(self, vehicle_img, confidence_threshold=0.4):
@@ -165,7 +161,7 @@ class PlateRecognizer:
     def _preprocess_plate(self, plate_img):
         """
         Preprocess the license plate image for better character recognition.
-        Optimized for Tesseract OCR with minimal processing steps.
+        Optimized with multiple processing steps to improve OCR accuracy.
 
         Args:
             plate_img: Cropped license plate image
@@ -182,8 +178,8 @@ class PlateRecognizer:
             # Resize to appropriate size for OCR while maintaining aspect ratio
             height, width = plate_img.shape[:2]
 
-            # Tesseract works best with larger images than EasyOCR
-            new_width = 400  # Optimal width for Tesseract
+            # Enhanced resizing for better OCR results
+            new_width = 400  # Optimal width for OCR
             new_height = int(height * (new_width / width))
 
             # Ensure the height is at least 50px for better OCR results
@@ -200,7 +196,7 @@ class PlateRecognizer:
             )
             processed_images['resized'] = resized
 
-            # Convert to grayscale (essential for Tesseract)
+            # Convert to grayscale (enhances OCR accuracy)
             gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) > 2 else resized
             processed_images['gray'] = gray
 
@@ -209,7 +205,7 @@ class PlateRecognizer:
             enhanced = clahe.apply(gray)
             processed_images['enhanced'] = enhanced
 
-            # Apply Gaussian blur to remove noise (works better with Tesseract)
+            # Apply Gaussian blur to remove noise
             # Very light blur that preserves edges better than bilateral for text
             blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
             processed_images['blurred'] = blurred
@@ -365,7 +361,7 @@ class PlateRecognizer:
 
     def recognize_characters(self, plate_img, confidence_threshold=0.3):
         """
-        Recognize characters on the license plate using Tesseract OCR.
+        Recognize characters on the license plate using EasyOCR.
 
         Args:
             plate_img: Cropped license plate image
@@ -387,97 +383,70 @@ class PlateRecognizer:
             all_results = []
             allowed_chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789-'
 
-            # Configure tesseract with allowlist for license plate characters
-            # This restricts recognized characters to only those relevant for license plates
-            config = f'{self.tesseract_config} -c tessedit_char_whitelist="{allowed_chars}"'
-
-            # Process each image variant with Tesseract
+            # Process each image variant with EasyOCR
             for img_type, img in processed_images.items():
                 try:
-                    # Run Tesseract OCR with detailed output for confidence values
-                    ocr_result = pytesseract.image_to_data(
-                        img,
-                        lang=self.tesseract_lang,
-                        config=config,
-                        output_type=Output.DICT
+                    # Convert to RGB for EasyOCR if needed
+                    if len(img.shape) == 2:  # If grayscale
+                        img_for_ocr = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+                    else:
+                        img_for_ocr = img
+
+                    # Fast method with greedy decoder
+                    detection_results = self.reader.readtext(
+                        img_for_ocr,
+                        detail=1,  # Return bounding boxes and confidences
+                        paragraph=False,  # Treat each text box separately
+                        decoder='greedy',  # Greedy decoder is much faster
+                        allowlist=allowed_chars,  # Standard Latin and German characters
+                        batch_size=1,  # Process one image at a time
+                        mag_ratio=1.5,  # Moderate magnification ratio for speed
+                        canvas_size=1280,  # Smaller canvas size for faster processing
+                        contrast_ths=0.2,  # Lower contrast threshold for low contrast plates
+                        adjust_contrast=1.3  # Moderate contrast adjustment
                     )
 
-                    # Extract text and confidence values, handle empty results
-                    line_texts = [text for text in ocr_result['text'] if text.strip()]
-                    if not line_texts:
-                        continue
+                    # Process results
+                    for box, text, confidence in detection_results:
+                        if confidence >= confidence_threshold:
+                            # Skip very short segments that are likely part of another detection
+                            is_part = any(r[0].startswith(text) or r[0].endswith(text) for r in all_results)
+                            if len(text) <= 2 and is_part:
+                                continue
 
-                    # Calculate confidence as the average of word confidences
-                    # Skip empty and single character words as they're often noise
-                    valid_confidences = [
-                        conf for text, conf in
-                        zip(ocr_result['text'], ocr_result['conf'])
-                        if text.strip() and len(text.strip()) > 1
-                    ]
-
-                    if not valid_confidences:
-                        continue
-
-                    avg_confidence = sum(valid_confidences) / len(valid_confidences) / 100.0
-
-                    # Combine all detected text in this image (for multi-line detection)
-                    combined_text = ' '.join(line_texts)
-
-                    # Some basic filtering
-                    if len(combined_text) < 2:
-                        continue
-
-                    # Clean and normalize the plate text
-                    cleaned_text = self._clean_plate_text(combined_text)
-
-                    if cleaned_text:
-                        # Track which preprocessing method gave us this result
-                        all_results.append((cleaned_text, avg_confidence, f"tesseract-{img_type}"))
+                            cleaned_text = self._clean_plate_text(text)
+                            if cleaned_text:
+                                all_results.append((cleaned_text, confidence, f"easyocr-{img_type}"))
 
                 except Exception as e:
-                    logger.debug(f"Tesseract error on {img_type} image: {e}")
+                    logger.debug(f"EasyOCR error on {img_type} image: {e}")
 
-                # Try a second approach with slightly different parameters for plates with more text
-                try:
-                    # Try with PSM 6 (Assume a single uniform block of text)
-                    alt_config = f'--oem 1 --psm 6 -c tessedit_char_whitelist="{allowed_chars}"'
+                # Try with beam search for higher accuracy on challenging plates
+                if img_type in ['enhanced', 'binary', 'adaptive']:
+                    try:
+                        # Only run beam search on the most promising preprocessed images
+                        beam_results = self.reader.readtext(
+                            img_for_ocr,
+                            detail=1,
+                            paragraph=False,
+                            decoder='beamsearch',  # More accurate but slower
+                            beamWidth=5,  # Limited beam width for speed
+                            allowlist=allowed_chars,
+                            batch_size=1,
+                            mag_ratio=1.5
+                        )
 
-                    alt_result = pytesseract.image_to_string(
-                        img,
-                        lang=self.tesseract_lang,
-                        config=alt_config
-                    ).strip()
+                        for box, text, confidence in beam_results:
+                            if confidence >= confidence_threshold:
+                                cleaned_text = self._clean_plate_text(text)
+                                if cleaned_text:
+                                    # Check if this is a new or better result
+                                    existing = next((r for r in all_results if r[0] == cleaned_text), None)
+                                    if existing is None or confidence > existing[1]:
+                                        all_results.append((cleaned_text, confidence, f"easyocr-beam-{img_type}"))
 
-                    if alt_result and len(alt_result) >= 3:
-                        # Use a default confidence since we don't have detailed info
-                        default_conf = 0.7
-
-                        # Clean the text
-                        cleaned_alt = self._clean_plate_text(alt_result)
-                        if cleaned_alt:
-                            # Add as a separate result with different method tag
-                            all_results.append((cleaned_alt, default_conf, f"tesseract-alt-{img_type}"))
-
-                except Exception as e:
-                    logger.debug(f"Alternate Tesseract approach error: {e}")
-
-            # If no results at all, try a last-ditch attempt with the original image
-            if not all_results and 'original' in processed_images:
-                try:
-                    # Use a simple approach for the original image
-                    fallback_result = pytesseract.image_to_string(
-                        processed_images['original'],
-                        lang=self.tesseract_lang,
-                        config='--oem 1 --psm 8'  # Treat as a single word
-                    ).strip()
-
-                    if fallback_result:
-                        cleaned_fallback = self._clean_plate_text(fallback_result)
-                        if cleaned_fallback:
-                            all_results.append((cleaned_fallback, 0.5, "tesseract-fallback"))
-
-                except Exception as e:
-                    logger.debug(f"Fallback Tesseract error: {e}")
+                    except Exception as e:
+                        logger.debug(f"EasyOCR beam search error on {img_type} image: {e}")
 
             # Filter by confidence threshold
             valid_results = [r for r in all_results if r[1] >= confidence_threshold]
