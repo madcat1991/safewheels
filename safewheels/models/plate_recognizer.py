@@ -30,23 +30,28 @@ class PlateRecognizer:
         self.use_gpu = gpu
         self.languages = languages or ['en', 'de']  # English and German only for faster processing
 
-        # Initialize character confusions for post-processing
-        self.char_confusions = {
-            '0': 'O', 'O': '0',
-            '1': 'I', 'I': '1',
-            '8': 'B', 'B': '8',
-            '5': 'S', 'S': '5',
-            '2': 'Z', 'Z': '2'
+        # Character confusion maps for text correction
+        self.digit_to_letter = {'0': 'O', '1': 'I', '8': 'B', '5': 'S', '2': 'Z'}
+        self.letter_to_digit = {'O': '0', 'I': '1', 'B': '8', 'S': '5', 'Z': '2'}
+
+        # Common German city codes with umlauts
+        self.umlaut_corrections = {
+            'MU': 'MÜ',  # München
+            'LO': 'LÖ',  # Lörrach
+            'TU': 'TÜ',  # Tübingen
+            'FU': 'FÜ',  # Fürth
+            'GO': 'GÖ',  # Göttingen
+            'KO': 'KÖ',  # Köln area districts
         }
 
-        self._load_models()
-
-        # Common license plate patterns (can be extended)
+        # Common license plate patterns
         self.plate_patterns = {
             'european': r'[A-ZÄÖÜ]{1,3}[-\s]?[0-9]{1,4}[-\s]?[A-ZÄÖÜß0-9]{1,3}',
             'german': r'[A-ZÄÖÜ]{1,3}[-\s]?[A-Z]{1,2}[-\s]?[0-9]{1,4}',  # Standard German format
             'generic': r'[A-ZÄÖÜ0-9]{3,10}'  # Generic alphanumeric pattern
         }
+
+        self._load_models()
 
     def _load_models(self):
         """
@@ -62,7 +67,6 @@ class PlateRecognizer:
 
         # Initialize EasyOCR reader
         try:
-            # Initialize EasyOCR reader with specified languages
             self.reader = easyocr.Reader(
                 self.languages,
                 gpu=self.use_gpu
@@ -99,7 +103,7 @@ class PlateRecognizer:
                 boxes = result.boxes
 
                 for box in boxes:
-                    # Get bounding box coordinates (x1, y1, x2, y2)
+                    # Get bounding box coordinates and confidence
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     confidence = box.conf.item()
 
@@ -134,7 +138,7 @@ class PlateRecognizer:
             x, y, w, h = best_plate
             plate_img = vehicle_img[y:y+h, x:x+w].copy() if w > 0 and h > 0 else None
 
-            # Add a small padding around the plate (if possible) to improve OCR
+            # Add padding around the plate to improve OCR
             if plate_img is not None and w > 0 and h > 0:
                 # Calculate padding (10% of dimensions)
                 pad_x = max(int(w * 0.1), 5)
@@ -196,7 +200,7 @@ class PlateRecognizer:
             )
             processed_images['resized'] = resized
 
-            # Convert to grayscale (enhances OCR accuracy)
+            # Convert to grayscale
             gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) > 2 else resized
             processed_images['gray'] = gray
 
@@ -206,7 +210,6 @@ class PlateRecognizer:
             processed_images['enhanced'] = enhanced
 
             # Apply Gaussian blur to remove noise
-            # Very light blur that preserves edges better than bilateral for text
             blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
             processed_images['blurred'] = blurred
 
@@ -234,13 +237,12 @@ class PlateRecognizer:
                 return {'original': plate_img}
             return {}
 
-    def _clean_plate_text(self, text, confidence_data=None):
+    def _clean_plate_text(self, text):
         """
         Clean and normalize license plate text with improved character correction.
 
         Args:
             text: Raw text from OCR
-            confidence_data: Optional dict with character confidence values
 
         Returns:
             Cleaned license plate string
@@ -271,47 +273,29 @@ class PlateRecognizer:
                 rest_of_text = text[len(first_part):]
 
                 # First handle digit corrections in the city code
-                digit_corrections = {'0': 'O', '1': 'I', '8': 'B', '5': 'S', '2': 'Z'}
-                for digit, letter in digit_corrections.items():
+                for digit, letter in self.digit_to_letter.items():
                     first_part = first_part.replace(digit, letter)
 
-                # Check for common German city codes with umlauts (according to official codes)
-                # Format based on https://en.wikipedia.org/wiki/Vehicle_registration_plates_of_Germany
-                umlaut_corrections = {
-                    'MU': 'MÜ',  # München
-                    'LO': 'LÖ',  # Lörrach
-                    'TU': 'TÜ',  # Tübingen
-                    'FU': 'FÜ',  # Fürth
-                    'GO': 'GÖ',  # Göttingen
-                    'KO': 'KÖ',  # Köln area districts
-                }
-
                 # Apply the umlaut correction if this is a known city code
-                if first_part in umlaut_corrections:
-                    logger.debug(f"Correcting city code: {first_part} -> {umlaut_corrections[first_part]}")
-                    first_part = umlaut_corrections[first_part]
-
-                # For the rest of the text (after city code), apply opposite corrections
-                # In this part, letters are likely mistaken as digits (O→0, I→1)
-                # Identify the numeric portion at the end (if any)
-                rest_with_dashes = rest_of_text
+                if first_part in self.umlaut_corrections:
+                    logger.debug(f"Correcting city code: {first_part} -> {self.umlaut_corrections[first_part]}")
+                    first_part = self.umlaut_corrections[first_part]
 
                 # If there's a dash followed by digits at the end, apply specific corrections
-                num_part_match = re.search(r'-([A-Z0-9]+)$', rest_with_dashes)
+                num_part_match = re.search(r'-([A-Z0-9]+)$', rest_of_text)
                 if num_part_match:
                     num_part = num_part_match.group(1)
-                    num_part_start = rest_with_dashes.rfind('-' + num_part)
+                    num_part_start = rest_of_text.rfind('-' + num_part)
 
                     # Apply opposite corrections in the numeric part
                     # In this part, change 'O' to '0', 'I' to '1', etc.
                     corrected_num = num_part
-                    letter_to_digit = {'O': '0', 'I': '1', 'B': '8', 'S': '5', 'Z': '2'}
-                    for letter, digit in letter_to_digit.items():
+                    for letter, digit in self.letter_to_digit.items():
                         corrected_num = corrected_num.replace(letter, digit)
 
-                    rest_with_dashes = rest_with_dashes[:num_part_start+1] + corrected_num
+                    rest_of_text = rest_of_text[:num_part_start+1] + corrected_num
 
-                cleaned_text = first_part + rest_with_dashes
+                cleaned_text = first_part + rest_of_text
             else:
                 cleaned_text = text
         else:
@@ -359,6 +343,48 @@ class PlateRecognizer:
 
         return False
 
+    def _run_ocr_on_image(self, img, confidence_threshold, allowed_chars, use_beam_search=False):
+        """
+        Run OCR on a single preprocessed image.
+
+        Args:
+            img: Image to process
+            confidence_threshold: Minimum confidence for character recognition
+            allowed_chars: String of allowed characters
+            use_beam_search: Whether to use beam search decoder (slower but more accurate)
+
+        Returns:
+            List of (text, confidence, method) tuples
+        """
+        try:
+            # Convert to RGB for EasyOCR if needed
+            if len(img.shape) == 2:  # If grayscale
+                img_for_ocr = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            else:
+                img_for_ocr = img
+
+            decoder = 'beamsearch' if use_beam_search else 'greedy'
+            decoder_args = {'beamWidth': 5} if use_beam_search else {}
+
+            detection_results = self.reader.readtext(
+                img_for_ocr,
+                detail=1,  # Return bounding boxes and confidences
+                paragraph=False,  # Treat each text box separately
+                decoder=decoder,
+                allowlist=allowed_chars,
+                batch_size=1,  # Process one image at a time
+                mag_ratio=1.5,  # Moderate magnification ratio for speed
+                canvas_size=1280,  # Smaller canvas size for faster processing
+                contrast_ths=0.2,  # Lower contrast threshold for low contrast plates
+                adjust_contrast=1.3,  # Moderate contrast adjustment
+                **decoder_args
+            )
+
+            return detection_results
+        except Exception as e:
+            logger.debug(f"EasyOCR error with {decoder} decoder: {e}")
+            return []
+
     def recognize_characters(self, plate_img, confidence_threshold=0.3):
         """
         Recognize characters on the license plate using EasyOCR.
@@ -385,68 +411,37 @@ class PlateRecognizer:
 
             # Process each image variant with EasyOCR
             for img_type, img in processed_images.items():
-                try:
-                    # Convert to RGB for EasyOCR if needed
-                    if len(img.shape) == 2:  # If grayscale
-                        img_for_ocr = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                    else:
-                        img_for_ocr = img
+                # Run OCR with greedy decoder (faster)
+                detection_results = self._run_ocr_on_image(
+                    img, confidence_threshold, allowed_chars, use_beam_search=False
+                )
 
-                    # Fast method with greedy decoder
-                    detection_results = self.reader.readtext(
-                        img_for_ocr,
-                        detail=1,  # Return bounding boxes and confidences
-                        paragraph=False,  # Treat each text box separately
-                        decoder='greedy',  # Greedy decoder is much faster
-                        allowlist=allowed_chars,  # Standard Latin and German characters
-                        batch_size=1,  # Process one image at a time
-                        mag_ratio=1.5,  # Moderate magnification ratio for speed
-                        canvas_size=1280,  # Smaller canvas size for faster processing
-                        contrast_ths=0.2,  # Lower contrast threshold for low contrast plates
-                        adjust_contrast=1.3  # Moderate contrast adjustment
-                    )
+                # Process results
+                for box, text, confidence in detection_results:
+                    if confidence >= confidence_threshold:
+                        # Skip very short segments that are likely part of another detection
+                        is_part = any(r[0].startswith(text) or r[0].endswith(text) for r in all_results)
+                        if len(text) <= 2 and is_part:
+                            continue
 
-                    # Process results
-                    for box, text, confidence in detection_results:
-                        if confidence >= confidence_threshold:
-                            # Skip very short segments that are likely part of another detection
-                            is_part = any(r[0].startswith(text) or r[0].endswith(text) for r in all_results)
-                            if len(text) <= 2 and is_part:
-                                continue
-
-                            cleaned_text = self._clean_plate_text(text)
-                            if cleaned_text:
-                                all_results.append((cleaned_text, confidence, f"easyocr-{img_type}"))
-
-                except Exception as e:
-                    logger.debug(f"EasyOCR error on {img_type} image: {e}")
+                        cleaned_text = self._clean_plate_text(text)
+                        if cleaned_text:
+                            all_results.append((cleaned_text, confidence, f"easyocr-{img_type}"))
 
                 # Try with beam search for higher accuracy on challenging plates
                 if img_type in ['enhanced', 'binary', 'adaptive']:
-                    try:
-                        # Only run beam search on the most promising preprocessed images
-                        beam_results = self.reader.readtext(
-                            img_for_ocr,
-                            detail=1,
-                            paragraph=False,
-                            decoder='beamsearch',  # More accurate but slower
-                            beamWidth=5,  # Limited beam width for speed
-                            allowlist=allowed_chars,
-                            batch_size=1,
-                            mag_ratio=1.5
-                        )
+                    beam_results = self._run_ocr_on_image(
+                        img, confidence_threshold, allowed_chars, use_beam_search=True
+                    )
 
-                        for box, text, confidence in beam_results:
-                            if confidence >= confidence_threshold:
-                                cleaned_text = self._clean_plate_text(text)
-                                if cleaned_text:
-                                    # Check if this is a new or better result
-                                    existing = next((r for r in all_results if r[0] == cleaned_text), None)
-                                    if existing is None or confidence > existing[1]:
-                                        all_results.append((cleaned_text, confidence, f"easyocr-beam-{img_type}"))
-
-                    except Exception as e:
-                        logger.debug(f"EasyOCR beam search error on {img_type} image: {e}")
+                    for box, text, confidence in beam_results:
+                        if confidence >= confidence_threshold:
+                            cleaned_text = self._clean_plate_text(text)
+                            if cleaned_text:
+                                # Check if this is a new or better result
+                                existing = next((r for r in all_results if r[0] == cleaned_text), None)
+                                if existing is None or confidence > existing[1]:
+                                    all_results.append((cleaned_text, confidence, f"easyocr-beam-{img_type}"))
 
             # Filter by confidence threshold
             valid_results = [r for r in all_results if r[1] >= confidence_threshold]
