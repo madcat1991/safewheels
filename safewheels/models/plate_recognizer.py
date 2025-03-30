@@ -17,42 +17,178 @@ MIN_PLATE_LEN = 2
 
 
 def rotate_image(image, angle):
+    """Rotate an image around its center by the given angle.
+
+    Args:
+        image: The input image (numpy array)
+        angle: The rotation angle in degrees (positive = counterclockwise)
+
+    Returns:
+        The rotated image
+    """
+    if image is None or image.size == 0:
+        return image
+
+    # Calculate image center
     image_center = tuple(np.array(image.shape[1::-1]) / 2)
+
+    # Calculate new image dimensions to avoid cropping
+    height, width = image.shape[:2]
+    cos_angle = abs(np.cos(np.radians(angle)))
+    sin_angle = abs(np.sin(np.radians(angle)))
+    new_width = int(width * cos_angle + height * sin_angle)
+    new_height = int(height * cos_angle + width * sin_angle)
+
+    # Get rotation matrix
     rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
-    result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+
+    # Adjust the rotation matrix to account for new dimensions
+    rot_mat[0, 2] += (new_width - width) / 2
+    rot_mat[1, 2] += (new_height - height) / 2
+
+    # Perform the rotation with border replication to avoid artifacts
+    result = cv2.warpAffine(
+        image,
+        rot_mat,
+        (new_width, new_height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+
     return result
 
 
-def compute_skew(src_img):
+def compute_skew(src_img, max_angle_deg=30):
+    """Compute the skew angle of text in an image.
 
-    if len(src_img.shape) == 3:
-        h, w, _ = src_img.shape
-    elif len(src_img.shape) == 2:
-        h, w = src_img.shape
-    else:
-        print('upsupported image type')
+    Args:
+        src_img: Source image (numpy array)
+        max_angle_deg: Maximum angle to consider as valid skew (degrees)
 
-    img = cv2.medianBlur(src_img, 3)
-
-    edges = cv2.Canny(img,  threshold1=30,  threshold2=100, apertureSize=3, L2gradient=True)
-    lines = cv2.HoughLinesP(edges, 1, math.pi / 180, 30, minLineLength=w / 4.0, maxLineGap=h / 4.0)
-    angle = 0.0
-
-    cnt = 0
-    for x1, y1, x2, y2 in lines[0]:
-        ang = np.arctan2(y2 - y1, x2 - x1)
-        if math.fabs(ang) <= 30:  # excluding extreme rotations
-            angle += ang
-            cnt += 1
-
-    if cnt == 0:
+    Returns:
+        Estimated skew angle in degrees
+    """
+    if src_img is None or src_img.size == 0:
         return 0.0
 
-    return (angle / cnt)*180/math.pi
+    try:
+        # Determine image dimensions
+        if len(src_img.shape) == 3:
+            h, w, _ = src_img.shape
+        elif len(src_img.shape) == 2:
+            h, w = src_img.shape
+        else:
+            logger.warning("Unsupported image type for skew detection")
+            return 0.0
+
+        # Ensure minimum size for processing
+        if h < 20 or w < 20:
+            return 0.0
+
+        # Convert to grayscale if needed
+        if len(src_img.shape) == 3:
+            gray = cv2.cvtColor(src_img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = src_img.copy()
+
+        # Apply median blur to reduce noise while preserving edges
+        img = cv2.medianBlur(gray, 3)
+
+        # Binarize the image to enhance edge detection
+        _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # Detect edges using Canny
+        edges = cv2.Canny(binary, threshold1=30, threshold2=100, apertureSize=3, L2gradient=True)
+
+        # Find lines using probabilistic Hough transform
+        # Adjust parameters based on image dimensions
+        min_line_length = max(w / 6.0, 20)  # Min line length should be proportional to image width
+        max_line_gap = max(h / 6.0, 10)     # Max gap between line segments
+
+        lines = cv2.HoughLinesP(
+            edges,
+            rho=1,
+            theta=math.pi/180,
+            threshold=max(30, min(h, w) // 10),  # Adaptive threshold based on image size
+            minLineLength=min_line_length,
+            maxLineGap=max_line_gap
+        )
+
+        if lines is None or len(lines) == 0:
+            return 0.0
+
+        # Process detected lines to compute skew
+        angles = []
+        max_angle_rad = math.radians(max_angle_deg)
+
+        for line in lines:
+            for x1, y1, x2, y2 in line:
+                # Skip vertical and near-vertical lines
+                if abs(x2 - x1) < 5:
+                    continue
+
+                # Calculate angle
+                ang = np.arctan2(y2 - y1, x2 - x1)
+
+                # Normalize angle to be between -pi/2 and pi/2
+                while ang < -math.pi/2:
+                    ang += math.pi
+                while ang > math.pi/2:
+                    ang -= math.pi
+
+                # Only consider angles within max_angle_rad
+                if abs(ang) <= max_angle_rad:
+                    angles.append(ang)
+
+        if len(angles) == 0:
+            return 0.0
+
+        # Use median angle to reduce impact of outliers
+        median_angle = np.median(angles)
+        return math.degrees(median_angle)
+
+    except Exception as e:
+        logger.error(f"Error in skew detection: {e}")
+        return 0.0
 
 
-def deskew(src_img):
-    return rotate_image(src_img, compute_skew(src_img))
+def deskew(src_img, max_angle_deg=30):
+    """Correct the skew in an image by rotating it to align text horizontally.
+
+    Args:
+        src_img: Source image (numpy array)
+        max_angle_deg: Maximum angle to consider as valid skew (degrees)
+
+    Returns:
+        Deskewed image
+    """
+    if src_img is None or src_img.size == 0:
+        return src_img
+
+    try:
+        # Compute skew angle
+        angle = compute_skew(src_img, max_angle_deg)
+
+        # Skip rotation if angle is very small (reduces unnecessary processing)
+        if abs(angle) < 0.5:
+            return src_img
+
+        # Apply rotation to correct skew
+        deskewed_img = rotate_image(src_img, angle)
+
+        # Ensure we didn't create a much larger image
+        orig_size = src_img.size
+        new_size = deskewed_img.size
+
+        # If new image is more than 50% larger, revert to original
+        if new_size > orig_size * 1.5:
+            logger.warning("Deskewed image size increased significantly, using original")
+            return src_img
+
+        return deskewed_img
+    except Exception as e:
+        logger.error(f"Error in deskew: {e}")
+        return src_img
 
 
 class DePlateRecognizer:
@@ -445,7 +581,8 @@ class DePlateRecognizer:
             return None, 0.0
 
         try:
-            plate_img = deskew(plate_img)
+            # Apply deskew with a reasonable angle limit for license plates
+            plate_img = deskew(plate_img, max_angle_deg=15)
 
             # Preprocess the plate image for OCR - returns a dictionary of processed images
             processed_images = self._preprocess_plate(plate_img)
