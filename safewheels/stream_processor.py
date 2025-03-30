@@ -42,7 +42,7 @@ class StreamProcessor:
         # Lowered threshold for improved recall
         self.plate_confidence_threshold = config.get('plate_confidence_threshold', 0.3)
         # Process every nth frame (default: 10)
-        self.process_every_n_frames = config.get('process_every_n_frames', 10)
+        self.process_every_n_frames = config.get('process_every_n_frames', 5)
 
         # Thread control
         self._running = False
@@ -145,7 +145,7 @@ class StreamProcessor:
                     break
                 else:
                     # For streams, try to reconnect
-                    logger.warning(f"Connection error. Attempting to reconnect in 5 seconds...")
+                    logger.warning("Connection error. Attempting to reconnect in 5 seconds...")
                     time.sleep(5)
 
     def _process_frame(self, frame, timestamp, frame_count=None):
