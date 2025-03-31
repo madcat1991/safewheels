@@ -14,29 +14,16 @@ The `monitor_and_notify.py` script provides real-time monitoring of vehicle dete
 
 ### Configuration
 
-The script uses the same configuration file as the main SafeWheels application, but specifically requires the following settings to be set:
+The script uses the same configuration file as the main SafeWheels application. See the main [README.md](../README.md) for complete configuration options.
 
-```json
-{
-  "storage_path": "data/vehicles",
-  "csv_filename": "detections.csv",
-  "images_dirname": "images",
-  "vehicle_id_threshold_sec": 5,
-  "telegram_token": "YOUR_BOT_TOKEN",
-  "telegram_chat_id": "YOUR_CHAT_ID"
-}
-```
+Important configuration parameters for this script:
 
-Configuration parameters:
-
-| Parameter | Description | Required |
-|-----------|-------------|----------|
-| `storage_path` | Directory where vehicle detection data is stored | Yes |
-| `csv_filename` | Name of the CSV file containing detection records | Yes |
-| `images_dirname` | Name of the directory containing detection images | Yes |
-| `vehicle_id_threshold_sec` | Time threshold in seconds to consider a vehicle detection sequence as complete | Yes |
-| `telegram_token` | Your Telegram bot API token | Yes |
-| `telegram_chat_id` | The chat ID where notifications should be sent | Yes |
+| Parameter | Description |
+|-----------|-------------|
+| `vehicle_id_threshold_sec` | Time threshold in seconds to consider a vehicle detection sequence as complete |
+| `check_interval_sec` | How often (in seconds) the script checks for new completed vehicles |
+| `telegram_token` | Your Telegram bot API token |
+| `telegram_chat_id` | The chat ID where notifications should be sent |
 
 ### Usage
 
@@ -48,18 +35,26 @@ python monitor_and_notify.py -c /path/to/config.json
 
 Command-line arguments:
 
-- `-c, --config`: Path to the configuration file (default: config/config.json)
+- `-c, --config`: Path to the configuration file (required)
 
 ### How It Works
 
-1. The script continuously monitors the CSV file containing vehicle detection records
-2. When a vehicle is detected, it tracks all images captured for that vehicle
-3. After a configurable time threshold (default: 5 seconds) with no new detections for that vehicle, it considers the detection sequence complete
-4. It then selects the best image based on confidence scores:
-   - First priority: Image with highest OCR confidence (plate recognized)
-   - Second priority: Image with highest plate detection confidence
-   - Last priority: Image with highest vehicle detection confidence
-5. The selected image is sent to the configured Telegram chat with relevant details
+1. The script periodically checks the database at the interval specified by `check_interval_sec`
+2. It identifies vehicles that haven't been detected for at least `vehicle_id_threshold_sec` seconds (considered "completed")
+3. For each completed vehicle not already processed, it selects the best image based on confidence scores using database ranking
+4. The selected image is sent to the configured Telegram chat with relevant details
+5. The script tracks the last processed timestamp to avoid sending duplicate notifications
+
+### Efficient Implementation
+
+The script uses an optimized single SQL query with window functions to:
+
+- Find vehicles detected after the last processing timestamp
+- Filter for vehicles that haven't been detected for the threshold period
+- Rank images by confidence (OCR > plate detection > vehicle detection)
+- Select only the best image for each vehicle
+
+This database-driven approach is efficient even with large numbers of detections and minimizes memory usage.
 
 ### Continuous Operation
 
@@ -75,7 +70,7 @@ After=network.target
 [Service]
 User=yourusername
 WorkingDirectory=/path/to/safewheels
-ExecStart=/usr/bin/python /path/to/safewheels/scripts/monitor_and_notify.py
+ExecStart=/usr/bin/python /path/to/safewheels/scripts/monitor_and_notify.py -c /path/to/config.json
 Restart=always
 RestartSec=10
 
@@ -87,7 +82,17 @@ WantedBy=multi-user.target
 
 If you're not receiving notifications:
 
-1. Check that the Telegram bot token and chat ID are correctly configured
-2. Ensure the bot has permission to send messages to the specified chat
-3. Verify that the vehicle detection system is correctly writing to the CSV file
-4. Check the console output or logs for any error messages
+1. Check the Telegram configuration
+   - Verify the bot token and chat ID in config.json
+   - Ensure the bot has permission to send messages to the specified chat
+   - Test the bot by sending it a direct message
+
+2. Check the database setup
+   - Ensure the SQLite database file exists at the configured location
+   - Verify that the database contains records (use `sqlite3 path/to/database.db` and run `.tables` and `SELECT COUNT(*) FROM detections;`)
+   - Check that the database has the correct schema (run `.schema detections` in SQLite)
+   
+3. Review logs and permissions
+   - Check the console output for error messages
+   - Verify the script has read access to the database and images directory
+   - Ensure the images referenced in the database exist in the images directory
