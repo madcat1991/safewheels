@@ -2,9 +2,9 @@
 Record manager for storing vehicle and license plate detections.
 """
 import os
-import csv
 import logging
 import cv2
+import sqlite3
 from datetime import datetime
 import uuid
 
@@ -13,22 +13,24 @@ logger = logging.getLogger(__name__)
 
 class RecordManager:
     """
-    Simple storage manager for vehicle detections and license plate information.
-    Saves detection data in CSV format and manages image storage.
+    Storage manager for vehicle detections and license plate information.
+    Saves detection data in SQLite database and manages image storage.
     """
 
-    def __init__(self, storage_path="data/vehicles", max_stored_images=1000, vehicle_id_threshold_sec=5):
+    def __init__(self, storage_path, vehicle_id_threshold_sec, db_filename, images_dirname):
         """
         Initialize the record manager.
 
         Args:
             storage_path: Path to store detection images and metadata
-            max_stored_images: Maximum number of images to keep in storage
             vehicle_id_threshold_sec: Time threshold in seconds to consider as the same vehicle
+            db_filename: Name of the SQLite database file
+            images_dirname: Name of the directory to store images
         """
         self.storage_path = storage_path
-        self.max_stored_images = max_stored_images
         self.vehicle_id_threshold_sec = vehicle_id_threshold_sec
+        self.db_filename = db_filename
+        self.images_dirname = images_dirname
 
         # Vehicle tracking variables
         self.last_detection_time = 0
@@ -36,40 +38,61 @@ class RecordManager:
 
         # Ensure storage directory exists
         os.makedirs(storage_path, exist_ok=True)
-        os.makedirs(os.path.join(storage_path, "images"), exist_ok=True)
+        os.makedirs(os.path.join(storage_path, images_dirname), exist_ok=True)
 
-        # Setup CSV file
-        self.csv_file = os.path.join(storage_path, "detections.csv")
-        self.csv_headers = [
-            "vehicle_id",
-            "timestamp",
-            "datetime_ms",
-            "image",
-            "vehicle_confidence",
-            "plate_detection_confidence",
-            "plate_number",
-            "ocr_confidence",
-            "frame_number"
-        ]
+        # Setup SQLite database
+        self.db_path = os.path.join(storage_path, db_filename)
 
-        # Create CSV file if it doesn't exist
-        self._init_csv_file()
+        # Check if database exists - if not, initialize it
+        if not os.path.exists(self.db_path):
+            self._init_database()
+        else:
+            # Just connect to verify the database is valid
+            try:
+                conn = sqlite3.connect(self.db_path)
+                conn.close()
+            except sqlite3.Error as e:
+                logger.error(f"Error connecting to database: {e}")
+                raise ValueError(f"Could not connect to existing database: {e}")
 
         logger.info(
             f"Record manager initialized with storage at {storage_path}, "
+            f"database at {self.db_path}, "
             f"vehicle ID threshold: {vehicle_id_threshold_sec}s"
         )
 
-    def _init_csv_file(self):
-        """Initialize the CSV file with headers if it doesn't exist."""
-        if not os.path.exists(self.csv_file):
-            try:
-                with open(self.csv_file, 'w', newline='') as f:
-                    writer = csv.DictWriter(f, fieldnames=self.csv_headers)
-                    writer.writeheader()
-                logger.info(f"Created new detections CSV file at {self.csv_file}")
-            except Exception as e:
-                logger.error(f"Error creating CSV file: {e}")
+    def _init_database(self):
+        """Initialize the SQLite database with the necessary tables."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Create detections table
+            cursor.execute('''
+            CREATE TABLE detections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                datetime_ms TEXT NOT NULL,
+                image TEXT NOT NULL,
+                vehicle_confidence REAL NOT NULL,
+                plate_detection_confidence REAL NOT NULL,
+                plate_number TEXT,
+                ocr_confidence REAL NOT NULL,
+                frame_number INTEGER
+            )
+            ''')
+
+            # Create indexes for faster queries
+            cursor.execute('CREATE INDEX idx_vehicle_id ON detections(vehicle_id)')
+            cursor.execute('CREATE INDEX idx_timestamp ON detections(timestamp)')
+
+            conn.commit()
+            conn.close()
+            logger.info(f"Created new SQLite database at {self.db_path}")
+        except sqlite3.Error as e:
+            logger.error(f"Error creating database: {e}")
+            raise ValueError(f"Failed to initialize database: {e}")
 
     def _generate_vehicle_id(self):
         """Generate a unique short hash ID for a vehicle."""
@@ -134,24 +157,37 @@ class RecordManager:
         image_filename = f"{timestamp_ms}.jpg"
 
         # Save the annotated image
-        image_path = os.path.join(self.storage_path, "images", image_filename)
+        image_path = os.path.join(self.storage_path, self.images_dirname, image_filename)
         cv2.imwrite(image_path, annotated_img)
 
-        # Create detection record
-        detection = {
-            "vehicle_id": self.current_vehicle_id,
-            "timestamp": timestamp,
-            "datetime_ms": datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f"),
-            "image": image_filename,
-            "vehicle_confidence": vehicle_confidence,
-            "plate_detection_confidence": plate_detection_confidence,
-            "plate_number": plate_number if plate_number else "",
-            "ocr_confidence": ocr_confidence,
-            "frame_number": frame_number if frame_number is not None else ""
-        }
+        # Insert detection record into database
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
 
-        # Save to CSV
-        self._append_to_csv(detection)
+            cursor.execute('''
+            INSERT INTO detections (
+                vehicle_id, timestamp, datetime_ms, image,
+                vehicle_confidence, plate_detection_confidence,
+                plate_number, ocr_confidence, frame_number
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                self.current_vehicle_id,
+                timestamp,
+                datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f"),
+                image_filename,
+                vehicle_confidence,
+                plate_detection_confidence,
+                plate_number if plate_number else "",
+                ocr_confidence,
+                frame_number
+            ))
+
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error saving to database: {e}")
+            return
 
         # Log the detection
         if plate_number:
@@ -163,120 +199,3 @@ class RecordManager:
                 f"Saved vehicle detection with ID {self.current_vehicle_id} "
                 f"(confidence: {vehicle_confidence:.2f})"
             )
-
-        # Ensure we don't exceed max images
-        self._enforce_storage_limit()
-
-    def _append_to_csv(self, detection):
-        """Append a detection record to the CSV file."""
-        try:
-            with open(self.csv_file, 'a', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=self.csv_headers)
-                writer.writerow(detection)
-        except Exception as e:
-            logger.error(f"Error appending to CSV file: {e}")
-
-    def _enforce_storage_limit(self):
-        """Ensure storage doesn't exceed maximum limit by removing oldest images and records."""
-        # Count image files
-        image_dir = os.path.join(self.storage_path, "images")
-
-        try:
-            image_files = [f for f in os.listdir(image_dir) if os.path.isfile(os.path.join(image_dir, f))]
-        except Exception as e:
-            logger.error(f"Error listing image directory: {e}")
-            return
-
-        if len(image_files) <= self.max_stored_images:
-            return
-
-        # Need to remove some old images
-        excess = len(image_files) - self.max_stored_images
-
-        # Read all records from CSV
-        records = []
-        try:
-            with open(self.csv_file, 'r', newline='') as f:
-                reader = csv.DictReader(f)
-                records = list(reader)
-        except Exception as e:
-            logger.error(f"Error reading CSV file: {e}")
-            return
-
-        # Sort records by timestamp (oldest first)
-        records.sort(key=lambda x: float(x.get("timestamp", 0)))
-
-        # Select records to remove (oldest ones)
-        records_to_keep = records[excess:]
-        records_to_remove = records[:excess]
-
-        # Remove images associated with the oldest records
-        removed_images = 0
-        for record in records_to_remove:
-            # Remove image
-            image_filename = record.get("image", "")
-            if image_filename:
-                try:
-                    image_path = os.path.join(image_dir, image_filename)
-                    if os.path.exists(image_path):
-                        os.remove(image_path)
-                        removed_images += 1
-                except Exception as e:
-                    logger.warning(f"Failed to remove image {image_filename}: {e}")
-
-        # Rewrite CSV with remaining records
-        try:
-            with open(self.csv_file, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=self.csv_headers)
-                writer.writeheader()
-                writer.writerows(records_to_keep)
-        except Exception as e:
-            logger.error(f"Error rewriting CSV file: {e}")
-
-        logger.info(f"Storage limit enforced: removed {len(records_to_remove)} old records and {removed_images} images")
-
-    def get_latest_records(self, count=10):
-        """
-        Get the most recent vehicle records.
-
-        Args:
-            count: Number of records to return
-
-        Returns:
-            List of the most recent vehicle records
-        """
-        records = []
-        try:
-            with open(self.csv_file, 'r', newline='') as f:
-                reader = csv.DictReader(f)
-                records = list(reader)
-        except Exception as e:
-            logger.error(f"Error reading CSV file: {e}")
-            return []
-
-        # Sort by timestamp (newest first)
-        records.sort(key=lambda x: float(x.get("timestamp", 0)), reverse=True)
-        return records[:count]
-
-    def get_records_by_vehicle_id(self, vehicle_id):
-        """
-        Get all records for a specific vehicle ID.
-
-        Args:
-            vehicle_id: The vehicle ID to search for
-
-        Returns:
-            List of records for the specified vehicle ID, sorted by timestamp
-        """
-        records = []
-        try:
-            with open(self.csv_file, 'r', newline='') as f:
-                reader = csv.DictReader(f)
-                records = [r for r in reader if r.get("vehicle_id") == vehicle_id]
-        except Exception as e:
-            logger.error(f"Error reading CSV file: {e}")
-            return []
-
-        # Sort by timestamp
-        records.sort(key=lambda x: float(x.get("timestamp", 0)))
-        return records

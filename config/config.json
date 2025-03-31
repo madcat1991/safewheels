@@ -7,9 +7,8 @@
   "ocr_confidence_threshold": 0.2,
   "process_every_n_frames": 10,
   "storage_path": "data/vehicles",
-  "max_stored_images": 1000,
   "vehicle_id_threshold_sec": 5,
-  "csv_filename": "detections.csv",
+  "db_filename": "detections.db",
   "images_dirname": "images",
   "telegram_token": "",
   "telegram_chat_id": ""

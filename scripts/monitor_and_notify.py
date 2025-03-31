@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 """
 Monitor vehicle detection records and send the best image to Telegram.
-This script checks the detection CSV file for completed vehicle records and
+This script checks the detection database for completed vehicle records and
 sends the image with highest confidence to a configured Telegram channel.
 """
 import os
-import csv
 import time
 import logging
 import telegram
 import sys
 import argparse
+import sqlite3
+from safewheels.utils.config import load_config
 
 # Add project root to path to import safewheels modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from safewheels.utils.config import load_config
 
 # Configure logging
 logging.basicConfig(
@@ -40,15 +40,20 @@ class VehicleMonitor:
         # Load configuration
         self.config = load_config(config_path)
         self.storage_path = self.config.get("storage_path")
-        self.vehicle_id_threshold_sec = self.config.get("vehicle_id_threshold_sec", 5)
+        self.vehicle_id_threshold_sec = self.config.get("vehicle_id_threshold_sec")
 
-        # Get CSV and image directory from config
-        self.csv_filename = self.config.get("csv_filename")
-        self.images_dirname = self.config.get("images_dirname", "images")
+        # Get database and image directory from config
+        self.db_filename = self.config.get("db_filename")
+        self.images_dirname = self.config.get("images_dirname")
 
-        # CSV file path
-        self.csv_file = os.path.join(self.storage_path, self.csv_filename)
+        # Database file path
+        self.db_path = os.path.join(self.storage_path, self.db_filename)
         self.images_dir = os.path.join(self.storage_path, self.images_dirname)
+
+        # Check if database exists
+        if not os.path.exists(self.db_path):
+            logger.error(f"Database file {self.db_path} doesn't exist")
+            raise FileNotFoundError(f"Database file {self.db_path} not found")
 
         # Initialize Telegram bot from config
         self.telegram_token = self.config.get("telegram_token", "")
@@ -65,34 +70,36 @@ class VehicleMonitor:
         self.last_processed_timestamp = 0
         self.processed_vehicle_ids = set()
 
-        logger.info(f"Vehicle monitor initialized with CSV: {self.csv_file}")
+        logger.info(f"Vehicle monitor initialized with database: {self.db_path}")
         logger.info(f"Images directory: {self.images_dir}")
         logger.info(f"Telegram notifications will be sent to chat ID: {self.chat_id}")
 
     def get_latest_record(self):
         """
-        Get the most recent record from the CSV file.
+        Get the most recent record from the database.
 
         Returns:
             The most recent record as a dict, or None if no records found
         """
         try:
-            if not os.path.exists(self.csv_file):
-                logger.warning(f"CSV file {self.csv_file} doesn't exist")
-                return None
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-            with open(self.csv_file, 'r', newline='') as f:
-                reader = csv.DictReader(f)
-                records = list(reader)
+            cursor.execute('''
+            SELECT * FROM detections
+            ORDER BY timestamp DESC
+            LIMIT 1
+            ''')
 
-            if not records:
-                return None
+            row = cursor.fetchone()
+            conn.close()
 
-            # Sort by timestamp (newest first)
-            records.sort(key=lambda x: float(x.get("timestamp", 0)), reverse=True)
-            return records[0]
-        except Exception as e:
-            logger.error(f"Error reading CSV file: {e}")
+            if row:
+                return dict(row)
+            return None
+        except sqlite3.Error as e:
+            logger.error(f"Error reading from database: {e}")
             return None
 
     def get_records_by_vehicle_id(self, vehicle_id):
@@ -107,11 +114,20 @@ class VehicleMonitor:
         """
         records = []
         try:
-            with open(self.csv_file, 'r', newline='') as f:
-                reader = csv.DictReader(f)
-                records = [r for r in reader if r.get("vehicle_id") == vehicle_id]
-        except Exception as e:
-            logger.error(f"Error reading CSV file: {e}")
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute('''
+            SELECT * FROM detections
+            WHERE vehicle_id = ?
+            ORDER BY timestamp ASC
+            ''', (vehicle_id,))
+
+            records = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error reading from database: {e}")
             return []
 
         return records
@@ -172,7 +188,7 @@ class VehicleMonitor:
                 caption += f"🔢 OCR confidence: {float(record.get('ocr_confidence', 0)):.2f}\n"
             else:
                 caption = f"🚗 Vehicle detected: {vehicle_id}\n"
-                caption += "⚠️ No license plate recognized\n"
+                caption += f"⚠️ No license plate recognized\n"
 
             caption += f"⏱️ Time: {timestamp}"
 
@@ -256,8 +272,7 @@ if __name__ == "__main__":
         description="Monitor vehicle detection records and send notifications via Telegram"
     )
     parser.add_argument(
-        "-c", "--config",
-        default="config/config.json",
+        "-c", "--config", required=True,
         help="Path to the configuration file (default: config/config.json)"
     )
     args = parser.parse_args()
