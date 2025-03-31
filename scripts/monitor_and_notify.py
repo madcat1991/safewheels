@@ -11,6 +11,7 @@ import telegram
 import sys
 import argparse
 import sqlite3
+import asyncio
 from safewheels.utils.config import load_config
 
 # Configure logging
@@ -153,7 +154,7 @@ class VehicleMonitor:
             logger.error(f"Error querying database: {e}")
             return []
 
-    def send_notification(self, record):
+    async def send_notification(self, record):
         """
         Send a notification with the best image for a vehicle to all authorized users.
 
@@ -200,7 +201,7 @@ class VehicleMonitor:
                 try:
                     # Create InputFile from bytes to avoid reopening file for each user
                     photo = telegram.InputFile(photo_bytes, filename=f"{vehicle_id}.jpg")
-                    self.bot.send_photo(chat_id=user_id, photo=photo, caption=caption)
+                    await self.bot.send_photo(chat_id=user_id, photo=photo, caption=caption)
                     success_count += 1
                 except Exception as user_error:
                     logger.error(f"Failed to send notification to user {user_id}: {user_error}")
@@ -216,7 +217,7 @@ class VehicleMonitor:
             logger.error(f"Failed to send notification to any users for vehicle {vehicle_id}")
             return False
 
-    def process_vehicles(self):
+    async def process_vehicles(self):
         """
         Process unprocessed vehicles and send notifications for them.
         Update the last processed timestamp to the latest vehicle timestamp.
@@ -237,14 +238,14 @@ class VehicleMonitor:
             logger.info(f"Processing vehicle {vehicle_id} with timestamp {timestamp}")
 
             # Send notification with the best image
-            self.send_notification(record)
+            await self.send_notification(record)
 
             # Update the last processed timestamp if this is the latest timestamp
             if timestamp > self.last_processed_timestamp:
                 self.last_processed_timestamp = timestamp
                 logger.debug(f"Updated last processed timestamp to {timestamp}")
 
-    def run(self):
+    async def run(self):
         """
         Run the monitoring loop with the configured check interval.
         """
@@ -252,16 +253,16 @@ class VehicleMonitor:
 
         try:
             while True:
-                self.process_vehicles()
+                await self.process_vehicles()
                 logger.info(f"Sleeping for {self.check_interval_sec}s")
-                time.sleep(self.check_interval_sec)
+                await asyncio.sleep(self.check_interval_sec)
         except KeyboardInterrupt:
             logger.info("Monitoring stopped by user")
         except Exception as e:
             logger.error(f"Error in monitoring loop: {e}")
 
 
-if __name__ == "__main__":
+async def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
         description="Monitor vehicle detection records and send notifications via Telegram"
@@ -281,4 +282,8 @@ if __name__ == "__main__":
     monitor = VehicleMonitor(config_path=args.config)
 
     # Run the monitoring loop
-    monitor.run()
+    await monitor.run()
+
+if __name__ == "__main__":
+    # Run the async main function
+    asyncio.run(main())
