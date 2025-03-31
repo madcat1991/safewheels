@@ -7,6 +7,7 @@ import logging
 import cv2
 from datetime import datetime
 import uuid
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,8 @@ class RecordManager:
             "vehicle_id",
             "timestamp",
             "datetime_ms",
-            "vehicle_img",
+            "image",
             "vehicle_confidence",
-            "plate_img",
             "plate_detection_confidence",
             "plate_number",
             "ocr_confidence",
@@ -56,10 +56,7 @@ class RecordManager:
         # Create CSV file if it doesn't exist
         self._init_csv_file()
 
-        logger.info(
-            f"Record manager initialized with storage at {storage_path}, "
-            f"vehicle ID threshold: {vehicle_id_threshold_sec}s"
-        )
+        logger.info(f"Record manager initialized with storage at {storage_path}, vehicle ID threshold: {vehicle_id_threshold_sec}s")
 
     def _init_csv_file(self):
         """Initialize the CSV file with headers if it doesn't exist."""
@@ -76,16 +73,16 @@ class RecordManager:
         """Generate a unique short hash ID for a vehicle."""
         return uuid.uuid4().hex[:6]  # 6 character hex ID
 
-    def add_detection(self, timestamp, vehicle_img, vehicle_confidence=0.0, plate_img=None,
+    def add_detection(self, timestamp, vehicle_img, vehicle_confidence=0.0, plate_bbox=None,
                       plate_detection_confidence=0.0, plate_number=None, ocr_confidence=0.0, frame_number=None):
         """
-        Add a new vehicle detection record and save associated images.
+        Add a new vehicle detection record and save the image with a bounding box for the license plate.
 
         Args:
             timestamp: Detection time
             vehicle_img: Image of the detected vehicle
             vehicle_confidence: Confidence score for the vehicle detection
-            plate_img: Image of the license plate (or None if not detected)
+            plate_bbox: Bounding box of the detected license plate (x, y, w, h) or None
             plate_detection_confidence: Confidence score for plate detection
             plate_number: Recognized license plate text (or None if not recognized)
             ocr_confidence: Confidence score for the OCR recognition
@@ -98,30 +95,53 @@ class RecordManager:
 
         # Update the last detection time
         self.last_detection_time = timestamp
+        
+        # Create a copy of the vehicle image to draw on
+        annotated_img = vehicle_img.copy()
+        
+        # Draw bounding box for license plate if available
+        if plate_bbox is not None:
+            x, y, w, h = plate_bbox
+            
+            # Draw green rectangle around the plate
+            cv2.rectangle(
+                annotated_img, 
+                (x, y),
+                (x + w, y + h),
+                (0, 255, 0),  # Green color
+                2  # Line thickness
+            )
+            
+            # Add the detected plate number as text if available
+            if plate_number:
+                # Position the text above the bounding box if there's space
+                text_y = max(y - 10, 10)
+                cv2.putText(
+                    annotated_img,
+                    plate_number,
+                    (x, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,  # Font scale
+                    (0, 255, 0),  # Green color
+                    2  # Line thickness
+                )
 
-        # Generate filename with timestamp and recognition type
+        # Generate filename with timestamp (no "vehicle" or "car" in the name)
         current_time = datetime.now()
         timestamp_ms = current_time.strftime("%Y%m%d_%H%M%S_%f")  # Full timestamp with microseconds
-        vehicle_filename = f"{timestamp_ms}_car.jpg"
-        plate_filename = f"{timestamp_ms}_plate.jpg" if plate_img is not None else None
+        image_filename = f"{timestamp_ms}.jpg"
 
-        # Save vehicle image
-        vehicle_path = os.path.join(self.storage_path, "images", vehicle_filename)
-        cv2.imwrite(vehicle_path, vehicle_img)
-
-        # Save plate image if available
-        if plate_img is not None:
-            plate_path = os.path.join(self.storage_path, "images", plate_filename)
-            cv2.imwrite(plate_path, plate_img)
+        # Save the annotated image
+        image_path = os.path.join(self.storage_path, "images", image_filename)
+        cv2.imwrite(image_path, annotated_img)
 
         # Create detection record
         detection = {
             "vehicle_id": self.current_vehicle_id,
             "timestamp": timestamp,
             "datetime_ms": datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f"),
-            "vehicle_img": vehicle_filename,
+            "image": image_filename,
             "vehicle_confidence": vehicle_confidence,
-            "plate_img": plate_filename,
             "plate_detection_confidence": plate_detection_confidence,
             "plate_number": plate_number if plate_number else "",
             "ocr_confidence": ocr_confidence,
@@ -158,7 +178,7 @@ class RecordManager:
         """Ensure storage doesn't exceed maximum limit by removing oldest images and records."""
         # Count image files
         image_dir = os.path.join(self.storage_path, "images")
-
+        
         try:
             image_files = [f for f in os.listdir(image_dir) if os.path.isfile(os.path.join(image_dir, f))]
         except Exception as e:
@@ -191,27 +211,16 @@ class RecordManager:
         # Remove images associated with the oldest records
         removed_images = 0
         for record in records_to_remove:
-            # Remove vehicle image
-            vehicle_img = record.get("vehicle_img", "")
-            if vehicle_img:
+            # Remove image
+            image_filename = record.get("image", "")
+            if image_filename:
                 try:
-                    image_path = os.path.join(image_dir, vehicle_img)
+                    image_path = os.path.join(image_dir, image_filename)
                     if os.path.exists(image_path):
                         os.remove(image_path)
                         removed_images += 1
                 except Exception as e:
-                    logger.warning(f"Failed to remove image {vehicle_img}: {e}")
-
-            # Remove plate image if exists
-            plate_img = record.get("plate_img", "")
-            if plate_img:
-                try:
-                    image_path = os.path.join(image_dir, plate_img)
-                    if os.path.exists(image_path):
-                        os.remove(image_path)
-                        removed_images += 1
-                except Exception as e:
-                    logger.warning(f"Failed to remove image {plate_img}: {e}")
+                    logger.warning(f"Failed to remove image {image_filename}: {e}")
 
         # Rewrite CSV with remaining records
         try:
@@ -246,14 +255,14 @@ class RecordManager:
         # Sort by timestamp (newest first)
         records.sort(key=lambda x: float(x.get("timestamp", 0)), reverse=True)
         return records[:count]
-
+        
     def get_records_by_vehicle_id(self, vehicle_id):
         """
         Get all records for a specific vehicle ID.
-
+        
         Args:
             vehicle_id: The vehicle ID to search for
-
+            
         Returns:
             List of records for the specified vehicle ID, sorted by timestamp
         """
@@ -265,7 +274,7 @@ class RecordManager:
         except Exception as e:
             logger.error(f"Error reading CSV file: {e}")
             return []
-
+            
         # Sort by timestamp
         records.sort(key=lambda x: float(x.get("timestamp", 0)))
         return records

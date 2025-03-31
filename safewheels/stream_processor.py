@@ -249,19 +249,19 @@ class StreamProcessor:
             vehicle_confidence = vehicle['confidence']
 
             # Attempt license plate recognition
-            # Now returns separate confidences for plate detection and OCR
-            plate_img, plate_number, plate_detection_confidence, ocr_confidence = self.plate_recognizer.recognize(
+            # Get plate image, bbox, and recognition results
+            plate_img, plate_bbox, plate_detection_confidence, plate_number, ocr_confidence = self.plate_recognizer.recognize_with_bbox(
                 vehicle_img,
                 self.plate_detection_threshold,
                 self.ocr_confidence_threshold
             )
 
-            # Store the detection with detailed confidence values
+            # Store the detection with detailed confidence values and bounding box
             self.record_manager.add_detection(
                 timestamp=timestamp,
                 vehicle_img=vehicle_img,
                 vehicle_confidence=vehicle_confidence,
-                plate_img=plate_img if plate_img is not None else None,
+                plate_bbox=plate_bbox,
                 plate_detection_confidence=plate_detection_confidence,
                 plate_number=plate_number,
                 ocr_confidence=ocr_confidence,
