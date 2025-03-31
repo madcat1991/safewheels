@@ -7,7 +7,6 @@ import logging
 import cv2
 from datetime import datetime
 import uuid
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,10 @@ class RecordManager:
         # Create CSV file if it doesn't exist
         self._init_csv_file()
 
-        logger.info(f"Record manager initialized with storage at {storage_path}, vehicle ID threshold: {vehicle_id_threshold_sec}s")
+        logger.info(
+            f"Record manager initialized with storage at {storage_path}, "
+            f"vehicle ID threshold: {vehicle_id_threshold_sec}s"
+        )
 
     def _init_csv_file(self):
         """Initialize the CSV file with headers if it doesn't exist."""
@@ -95,23 +97,23 @@ class RecordManager:
 
         # Update the last detection time
         self.last_detection_time = timestamp
-        
+
         # Create a copy of the vehicle image to draw on
         annotated_img = vehicle_img.copy()
-        
+
         # Draw bounding box for license plate if available
         if plate_bbox is not None:
             x, y, w, h = plate_bbox
-            
+
             # Draw green rectangle around the plate
             cv2.rectangle(
-                annotated_img, 
+                annotated_img,
                 (x, y),
                 (x + w, y + h),
                 (0, 255, 0),  # Green color
                 2  # Line thickness
             )
-            
+
             # Add the detected plate number as text if available
             if plate_number:
                 # Position the text above the bounding box if there's space
@@ -178,7 +180,7 @@ class RecordManager:
         """Ensure storage doesn't exceed maximum limit by removing oldest images and records."""
         # Count image files
         image_dir = os.path.join(self.storage_path, "images")
-        
+
         try:
             image_files = [f for f in os.listdir(image_dir) if os.path.isfile(os.path.join(image_dir, f))]
         except Exception as e:
@@ -255,14 +257,14 @@ class RecordManager:
         # Sort by timestamp (newest first)
         records.sort(key=lambda x: float(x.get("timestamp", 0)), reverse=True)
         return records[:count]
-        
+
     def get_records_by_vehicle_id(self, vehicle_id):
         """
         Get all records for a specific vehicle ID.
-        
+
         Args:
             vehicle_id: The vehicle ID to search for
-            
+
         Returns:
             List of records for the specified vehicle ID, sorted by timestamp
         """
@@ -274,7 +276,7 @@ class RecordManager:
         except Exception as e:
             logger.error(f"Error reading CSV file: {e}")
             return []
-            
+
         # Sort by timestamp
         records.sort(key=lambda x: float(x.get("timestamp", 0)))
         return records

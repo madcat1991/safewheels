@@ -250,11 +250,12 @@ class StreamProcessor:
 
             # Attempt license plate recognition
             # Get plate image, bbox, and recognition results
-            plate_img, plate_bbox, plate_detection_confidence, plate_number, ocr_confidence = self.plate_recognizer.recognize_with_bbox(
+            res = self.plate_recognizer.recognize(
                 vehicle_img,
                 self.plate_detection_threshold,
                 self.ocr_confidence_threshold
             )
+            plate_img, plate_bbox, plate_detection_confidence, plate_number, ocr_confidence = res
 
             # Store the detection with detailed confidence values and bounding box
             self.record_manager.add_detection(

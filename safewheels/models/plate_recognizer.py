@@ -644,7 +644,7 @@ class DePlateRecognizer:
             logger.error(f"Error during character recognition: {e}")
             return None, 0.0
 
-    def recognize_with_bbox(self, vehicle_img, confidence_threshold=0.4, ocr_confidence_threshold=0.3):
+    def recognize(self, vehicle_img, confidence_threshold=0.4, ocr_confidence_threshold=0.3):
         """
         Detect and recognize license plate in a vehicle image, returning both the plate image and its bounding box.
 
@@ -686,28 +686,3 @@ class DePlateRecognizer:
         except Exception as e:
             logger.error(f"Error during license plate recognition: {e}")
             return None, None, 0.0, None, 0.0
-            
-    def recognize(self, vehicle_img, confidence_threshold=0.4, ocr_confidence_threshold=0.3):
-        """
-        Detect and recognize license plate in a vehicle image.
-
-        Args:
-            vehicle_img: Vehicle image (numpy array)
-            confidence_threshold: Minimum confidence for plate detection
-            ocr_confidence_threshold: Minimum confidence for character recognition
-
-        Returns:
-            Tuple of (plate_img, plate_number, plate_confidence, ocr_confidence)
-            If no plate is detected, returns (None, None, 0.0, 0.0)
-            If plate is detected but no characters recognized, returns (plate_img, None, plate_confidence, 0.0)
-        """
-        try:
-            # Use the new method and extract just the parts needed for backwards compatibility
-            plate_img, _, plate_confidence, plate_number, ocr_confidence = self.recognize_with_bbox(
-                vehicle_img, confidence_threshold, ocr_confidence_threshold
-            )
-            return plate_img, plate_number, plate_confidence, ocr_confidence
-
-        except Exception as e:
-            logger.error(f"Error during license plate recognition: {e}")
-            return None, None, 0.0, 0.0
