@@ -56,7 +56,8 @@ def create_default_config(config_path):
         "plate_confidence_threshold": 0.7,  # Minimum confidence for plate recognition
         "grouping_time_window": 10,  # Seconds to group detections of the same vehicle
         "storage_path": "data/vehicles",  # Where to store detected vehicle images
-        "max_stored_images": 1000  # Maximum number of images to keep
+        "max_stored_images": 1000,  # Maximum number of images to keep
+        "vehicle_id_threshold_sec": 5  # Seconds threshold for considering two detections as the same vehicle
     }
 
     # Create directory if it doesn't exist

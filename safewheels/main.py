@@ -63,7 +63,8 @@ def main():
     plate_recognizer = DePlateRecognizer()
     record_manager = RecordManager(
         storage_path=config.get('storage_path', 'data/vehicles'),
-        max_stored_images=config.get('max_stored_images', 1000)
+        max_stored_images=config.get('max_stored_images', 1000),
+        vehicle_id_threshold_sec=config.get('vehicle_id_threshold_sec', 5)
     )
 
     # Create stream processor
