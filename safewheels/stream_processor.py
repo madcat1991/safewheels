@@ -1,7 +1,6 @@
 """
 Stream and video file processor for vehicle and license plate detection.
 """
-import cv2
 import os
 import time
 import threading
@@ -243,7 +242,6 @@ class StreamProcessor:
         for i, vehicle in enumerate(vehicles):
             # Extract the vehicle portion of the image
             vehicle_img = self._crop_vehicle(frame, vehicle)
-            vehicle_img = self._sharpen_image(vehicle_img)
 
             # Get vehicle detection confidence
             vehicle_confidence = vehicle['confidence']
@@ -290,10 +288,3 @@ class StreamProcessor:
         h = min(height - y, int(h))
 
         return frame[y:y+h, x:x+w]
-
-    def _sharpen_image(self, img):
-        """
-        Apply a simple unsharp masking to lightly sharpen the image.
-        """
-        gaussian = cv2.GaussianBlur(img, (9, 9), 10.0)
-        return cv2.addWeighted(img, 1.5, gaussian, -0.5, 0)

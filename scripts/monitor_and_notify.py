@@ -38,6 +38,7 @@ class VehicleMonitor:
         self.config = load_config(config_path)
         self.storage_path = self.config.get("storage_path")
         self.vehicle_id_threshold_sec = self.config.get("vehicle_id_threshold_sec")
+        self.check_interval_sec = self.config.get("check_interval_sec")
 
         # Get database and image directory from config
         self.db_filename = self.config.get("db_filename")
@@ -252,6 +253,7 @@ class VehicleMonitor:
         try:
             while True:
                 self.process_vehicles()
+                logger.info(f"Sleeping for {self.check_interval_sec}s")
                 time.sleep(self.check_interval_sec)
         except KeyboardInterrupt:
             logger.info("Monitoring stopped by user")
