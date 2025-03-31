@@ -105,3 +105,49 @@ Detected vehicles and license plates are stored in the configured `storage_path`
 - Vehicle images
 - License plate images (when detected)
 - JSON records with timestamps, frame numbers, and detection data
+- CSV file with all detection records
+
+## Monitoring and Notifications
+
+SafeWheels includes a monitoring script that can continuously check detection records and send the best images to a Telegram chat.
+
+### Setting up Telegram notifications
+
+1. Create a Telegram bot using BotFather
+   - Message @BotFather on Telegram
+   - Use the `/newbot` command and follow the instructions
+   - Save the API token you receive
+
+2. Get your chat ID
+   - Add the bot to a group or start a chat with it
+   - Send a message to the bot
+   - Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
+   - Look for the `chat` object and note the `id` value
+
+3. Update your configuration in `config/config.json`:
+   ```json
+   {
+     ...
+     "telegram_token": "YOUR_BOT_TOKEN",
+     "telegram_chat_id": "YOUR_CHAT_ID"
+   }
+   ```
+
+### Running the monitor script
+
+```bash
+python scripts/monitor_and_notify.py -c /path/to/config.json
+```
+
+Arguments:
+- `-c, --config`: Path to the configuration file (default: config/config.json)
+
+The script will monitor for completed vehicle detections and send images with the highest confidence to your Telegram chat.
+
+Required configuration settings for the monitoring script:
+- `storage_path`: Location of your detection data
+- `csv_filename`: Name of the CSV file with detections
+- `images_dirname`: Folder containing the images
+- `telegram_token`: Your Telegram bot token
+- `telegram_chat_id`: Your Telegram chat ID
+- `vehicle_id_threshold_sec`: Time threshold to consider a vehicle detection as complete
