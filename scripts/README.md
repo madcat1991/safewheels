@@ -91,7 +91,7 @@ If you're not receiving notifications:
    - Ensure the SQLite database file exists at the configured location
    - Verify that the database contains records (use `sqlite3 path/to/database.db` and run `.tables` and `SELECT COUNT(*) FROM detections;`)
    - Check that the database has the correct schema (run `.schema detections` in SQLite)
-   
+
 3. Review logs and permissions
    - Check the console output for error messages
    - Verify the script has read access to the database and images directory
