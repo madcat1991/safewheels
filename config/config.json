@@ -11,5 +11,6 @@
   "db_filename": "detections.db",
   "images_dirname": "images",
   "telegram_token": "",
-  "telegram_chat_id": ""
+  "telegram_chat_id": "",
+  "check_interval_sec": 5
 }

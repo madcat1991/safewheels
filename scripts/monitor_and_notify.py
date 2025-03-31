@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 Monitor vehicle detection records and send the best image to Telegram.
-This script checks the detection database for completed vehicle records and
+This script periodically checks the detection database for completed vehicle records and
 sends the image with highest confidence to a configured Telegram channel.
 """
 import os
@@ -12,9 +12,6 @@ import sys
 import argparse
 import sqlite3
 from safewheels.utils.config import load_config
-
-# Add project root to path to import safewheels modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Configure logging
 logging.basicConfig(
@@ -66,97 +63,89 @@ class VehicleMonitor:
         self.bot = telegram.Bot(token=self.telegram_token)
 
         # Tracking variables
-        self.last_processed_vehicle_id = None
         self.last_processed_timestamp = 0
-        self.processed_vehicle_ids = set()
 
         logger.info(f"Vehicle monitor initialized with database: {self.db_path}")
         logger.info(f"Images directory: {self.images_dir}")
+        logger.info(f"Check interval: {self.check_interval_sec} seconds")
+        logger.info(f"Vehicle threshold: {self.vehicle_id_threshold_sec} seconds")
         logger.info(f"Telegram notifications will be sent to chat ID: {self.chat_id}")
 
-    def get_latest_record(self):
+    def get_unprocessed_completed_vehicles(self):
         """
-        Get the most recent record from the database.
+        Get vehicles that:
+        1. Have not been processed yet (timestamp > last_processed_timestamp)
+        2. Are considered completed (last detected more than vehicle_id_threshold_sec ago)
+        3. With their best image (highest OCR confidence, or plate confidence, or vehicle confidence)
 
         Returns:
-            The most recent record as a dict, or None if no records found
+            List of vehicle records with their best image ordered by timestamp
         """
         try:
+            current_time = time.time()
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            cursor.execute('''
-            SELECT * FROM detections
-            ORDER BY timestamp DESC
-            LIMIT 1
-            ''')
-
-            row = cursor.fetchone()
-            conn.close()
-
-            if row:
-                return dict(row)
-            return None
-        except sqlite3.Error as e:
-            logger.error(f"Error reading from database: {e}")
-            return None
-
-    def get_records_by_vehicle_id(self, vehicle_id):
-        """
-        Get all records for a specific vehicle ID.
-
-        Args:
-            vehicle_id: The vehicle ID to search for
-
-        Returns:
-            List of records for the specified vehicle ID
-        """
-        records = []
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-
-            cursor.execute('''
-            SELECT * FROM detections
-            WHERE vehicle_id = ?
+            # Get the best image for each vehicle in a single query
+            query = """
+            WITH
+            -- First get the latest timestamp for each vehicle
+            latest_timestamps AS (
+                SELECT
+                    vehicle_id,
+                    MAX(timestamp) as latest_timestamp
+                FROM detections
+                WHERE timestamp > ?
+                GROUP BY vehicle_id
+            ),
+            -- Then filter for vehicles that haven't been detected for at least vehicle_id_threshold_sec
+            completed_vehicles AS (
+                SELECT
+                    vehicle_id,
+                    latest_timestamp
+                FROM latest_timestamps
+                WHERE (? - latest_timestamp) >= ?
+            ),
+            -- Rank images for each vehicle by confidence
+            ranked_images AS (
+                SELECT
+                    d.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY d.vehicle_id
+                        ORDER BY
+                            -- First priority: OCR confidence (if available)
+                            CASE WHEN d.ocr_confidence > 0 THEN 1 ELSE 0 END DESC,
+                            d.ocr_confidence DESC,
+                            -- Second priority: Plate detection confidence
+                            CASE WHEN d.plate_detection_confidence > 0 THEN 1 ELSE 0 END DESC,
+                            d.plate_detection_confidence DESC,
+                            -- Third priority: Vehicle confidence
+                            d.vehicle_confidence DESC
+                    ) as rank
+                FROM detections d
+                JOIN completed_vehicles cv ON d.vehicle_id = cv.vehicle_id
+            )
+            -- Select only the best image (highest confidence) for each vehicle
+            SELECT *
+            FROM ranked_images
+            WHERE rank = 1
             ORDER BY timestamp ASC
-            ''', (vehicle_id,))
+            """
 
-            records = [dict(row) for row in cursor.fetchall()]
+            cursor.execute(query, (
+                self.last_processed_timestamp,
+                current_time,
+                self.vehicle_id_threshold_sec
+            ))
+
+            result = [dict(row) for row in cursor.fetchall()]
             conn.close()
+            return result
+
         except sqlite3.Error as e:
-            logger.error(f"Error reading from database: {e}")
+            logger.error(f"Error querying database: {e}")
             return []
-
-        return records
-
-    def find_best_image_record(self, records):
-        """
-        Find the record with the best image based on confidence scores.
-
-        Args:
-            records: List of vehicle records
-
-        Returns:
-            The record with the highest confidence, or None if no records
-        """
-        if not records:
-            return None
-
-        # 1. First try to find record with highest OCR confidence (plate recognized)
-        ocr_records = [r for r in records if float(r.get("ocr_confidence", 0)) > 0]
-        if ocr_records:
-            return max(ocr_records, key=lambda x: float(x.get("ocr_confidence", 0)))
-
-        # 2. If no OCR confidence, use plate detection confidence
-        plate_records = [r for r in records if float(r.get("plate_detection_confidence", 0)) > 0]
-        if plate_records:
-            return max(plate_records, key=lambda x: float(x.get("plate_detection_confidence", 0)))
-
-        # 3. Otherwise, use vehicle confidence
-        return max(records, key=lambda x: float(x.get("vehicle_confidence", 0)))
 
     def send_notification(self, record):
         """
@@ -164,6 +153,9 @@ class VehicleMonitor:
 
         Args:
             record: The record with the best image
+
+        Returns:
+            True if notification was sent successfully, False otherwise
         """
         try:
             # Get image path
@@ -188,7 +180,7 @@ class VehicleMonitor:
                 caption += f"🔢 OCR confidence: {float(record.get('ocr_confidence', 0)):.2f}\n"
             else:
                 caption = f"🚗 Vehicle detected: {vehicle_id}\n"
-                caption += f"⚠️ No license plate recognized\n"
+                caption += "⚠️ No license plate recognized\n"
 
             caption += f"⏱️ Time: {timestamp}"
 
@@ -203,63 +195,44 @@ class VehicleMonitor:
             logger.error(f"Error sending notification: {e}")
             return False
 
-    def check_and_notify(self):
+    def process_vehicles(self):
         """
-        Check for completed vehicle records and send notifications.
+        Process unprocessed vehicles and send notifications for them.
+        Update the last processed timestamp to the latest vehicle timestamp.
         """
-        # Get the latest record
-        latest_record = self.get_latest_record()
-        if not latest_record:
+        # Get unprocessed vehicles with their best images
+        vehicles = self.get_unprocessed_completed_vehicles()
+
+        if not vehicles:
             return
 
-        latest_timestamp = float(latest_record.get("timestamp", 0))
-        latest_vehicle_id = latest_record.get("vehicle_id", "")
-        current_time = time.time()
+        logger.info(f"Found {len(vehicles)} unprocessed vehicles")
 
-        # If this is a different vehicle than the last processed one
-        if latest_vehicle_id != self.last_processed_vehicle_id:
-            # Check if enough time has passed since last detection to consider it complete
-            time_since_detection = current_time - latest_timestamp
+        # Process each vehicle
+        for record in vehicles:
+            vehicle_id = record["vehicle_id"]
+            timestamp = float(record["timestamp"])
 
-            if time_since_detection >= self.vehicle_id_threshold_sec:
-                # This means the vehicle detection sequence is likely complete
+            logger.info(f"Processing vehicle {vehicle_id} with timestamp {timestamp}")
 
-                # Check if we already processed this vehicle ID
-                if latest_vehicle_id not in self.processed_vehicle_ids:
-                    logger.info(f"Processing completed vehicle: {latest_vehicle_id}")
+            # Send notification with the best image
+            self.send_notification(record)
 
-                    # Get all records for this vehicle
-                    vehicle_records = self.get_records_by_vehicle_id(latest_vehicle_id)
-
-                    # Find the best image
-                    best_record = self.find_best_image_record(vehicle_records)
-
-                    if best_record:
-                        # Send notification with the best image
-                        self.send_notification(best_record)
-
-                    # Add to processed set
-                    self.processed_vehicle_ids.add(latest_vehicle_id)
-
-                    # Limit the size of the processed set to avoid memory issues
-                    if len(self.processed_vehicle_ids) > 1000:
-                        self.processed_vehicle_ids = set(list(self.processed_vehicle_ids)[-500:])
-
-        # Update the last processed vehicle ID and timestamp
-        self.last_processed_vehicle_id = latest_vehicle_id
-        self.last_processed_timestamp = latest_timestamp
+            # Update the last processed timestamp if this is the latest timestamp
+            if timestamp > self.last_processed_timestamp:
+                self.last_processed_timestamp = timestamp
+                logger.debug(f"Updated last processed timestamp to {timestamp}")
 
     def run(self):
         """
-        Run the monitoring loop with 0.1s check interval.
+        Run the monitoring loop with the configured check interval.
         """
-        check_interval = 0.1  # Check every 0.1 seconds
-        logger.info(f"Starting monitoring loop with interval: {check_interval}s")
+        logger.info(f"Starting monitoring loop with interval: {self.check_interval_sec}s")
 
         try:
             while True:
-                self.check_and_notify()
-                time.sleep(check_interval)
+                self.process_vehicles()
+                time.sleep(self.check_interval_sec)
         except KeyboardInterrupt:
             logger.info("Monitoring stopped by user")
         except Exception as e:
@@ -273,7 +246,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-c", "--config", required=True,
-        help="Path to the configuration file (default: config/config.json)"
+        help="Path to the configuration file"
     )
     args = parser.parse_args()
 
