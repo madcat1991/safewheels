@@ -70,13 +70,54 @@ class VehicleMonitor:
 
         logger.info(f"Bot will send notifications to {len(self.authorized_users)} authorized users")
 
-        # Tracking variables
-        self.last_processed_timestamp = 0
+        # Set up timestamp persistence
+        self.timestamp_filename = self.config.get("timestamp_file", "last_processed.txt")
+        self.timestamp_path = os.path.join(self.storage_path, self.timestamp_filename)
+
+        # Load the last processed timestamp from file if it exists
+        self.last_processed_timestamp = self._load_timestamp()
 
         logger.info(f"Vehicle monitor initialized with database: {self.db_path}")
         logger.info(f"Images directory: {self.images_dir}")
+        logger.info(f"Timestamp file: {self.timestamp_path}")
+        logger.info(f"Last processed timestamp: {self.last_processed_timestamp}")
         logger.info(f"Check interval: {self.check_interval_sec} seconds")
         logger.info(f"Vehicle threshold: {self.vehicle_id_threshold_sec} seconds")
+
+    def _load_timestamp(self):
+        """
+        Load the last processed timestamp from file.
+
+        Returns:
+            The last processed timestamp as a float, or 0 if file doesn't exist
+        """
+        try:
+            if os.path.exists(self.timestamp_path):
+                with open(self.timestamp_path, 'r') as f:
+                    timestamp_str = f.read().strip()
+                    if timestamp_str:
+                        return float(timestamp_str)
+            return 0
+        except Exception as e:
+            logger.error(f"Error loading timestamp file: {e}")
+            return 0
+
+    def _save_timestamp(self, timestamp):
+        """
+        Save the timestamp to file.
+
+        Args:
+            timestamp: The timestamp to save
+        """
+        try:
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(self.timestamp_path), exist_ok=True)
+
+            with open(self.timestamp_path, 'w') as f:
+                f.write(str(timestamp))
+            logger.debug(f"Saved timestamp {timestamp} to {self.timestamp_path}")
+        except Exception as e:
+            logger.error(f"Error saving timestamp file: {e}")
 
     def get_unprocessed_completed_vehicles(self):
         """
@@ -103,8 +144,8 @@ class VehicleMonitor:
                     vehicle_id,
                     MAX(timestamp) as latest_timestamp
                 FROM detections
-                WHERE timestamp > ?
                 GROUP BY vehicle_id
+                HAVING latest_timestamp > ?
             ),
             -- Then filter for vehicles that haven't been detected for at least vehicle_id_threshold_sec
             completed_vehicles AS (
@@ -117,7 +158,12 @@ class VehicleMonitor:
             -- Rank images for each vehicle by confidence
             ranked_images AS (
                 SELECT
-                    d.*,
+                    d.vehicle_id,
+                    cv.latest_timestamp as timestamp,
+                    d.image,
+                    d.plate_number,
+                    d.datetime_ms,
+                    d.ocr_confidence,
                     ROW_NUMBER() OVER (
                         PARTITION BY d.vehicle_id
                         ORDER BY
@@ -242,8 +288,13 @@ class VehicleMonitor:
 
             # Update the last processed timestamp if this is the latest timestamp
             if timestamp > self.last_processed_timestamp:
-                self.last_processed_timestamp = timestamp
-                logger.debug(f"Updated last processed timestamp to {timestamp}")
+                # Add a small buffer (0.001 sec) to avoid processing
+                # the same vehicle twice (due to float precision)
+                self.last_processed_timestamp = timestamp + 0.001
+                logger.info(f"Updated last processed timestamp to {self.last_processed_timestamp}")
+
+                # Save the timestamp to file
+                self._save_timestamp(self.last_processed_timestamp)
 
     async def run(self):
         """
@@ -258,8 +309,12 @@ class VehicleMonitor:
                 await asyncio.sleep(self.check_interval_sec)
         except KeyboardInterrupt:
             logger.info("Monitoring stopped by user")
+            # Save timestamp on exit
+            self._save_timestamp(self.last_processed_timestamp)
         except Exception as e:
             logger.error(f"Error in monitoring loop: {e}")
+            # Try to save timestamp even if there was an error
+            self._save_timestamp(self.last_processed_timestamp)
 
 
 async def main():
