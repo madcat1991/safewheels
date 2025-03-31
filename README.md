@@ -105,11 +105,10 @@ SafeWheels includes a monitoring script that periodically checks detection recor
    - Use the `/newbot` command and follow the instructions
    - Save the API token you receive
 
-2. Get your chat ID
-   - Add the bot to a group or start a chat with it
-   - Send a message to the bot
+2. Get the user IDs for authorized users
+   - Have each authorized user send a message to the bot
    - Visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
-   - Look for the `chat` object and note the `id` value
+   - Look for the `from` object in each message and note the `id` value for each user
 
 3. Update your configuration in `config/config.json`:
    ```json
@@ -118,7 +117,10 @@ SafeWheels includes a monitoring script that periodically checks detection recor
      "db_filename": "detections.db",
      "check_interval_sec": 5,
      "telegram_token": "YOUR_BOT_TOKEN",
-     "telegram_chat_id": "YOUR_CHAT_ID"
+     "authorized_users": [
+       123456789,  // First user's ID
+       987654321   // Second user's ID
+     ]
    }
    ```
 
@@ -128,7 +130,7 @@ SafeWheels includes a monitoring script that periodically checks detection recor
 python scripts/monitor_and_notify.py -c /path/to/config.json
 ```
 
-The script will identify completed vehicle detections and send the best image for each vehicle to your Telegram chat. For each vehicle, it selects the image with the highest confidence based on this priority:
+The script will identify completed vehicle detections and send the best image for each vehicle to all authorized Telegram users. For each vehicle, it selects the image with the highest confidence based on this priority:
 1. Highest OCR confidence (plate recognized)
 2. Highest plate detection confidence
 3. Highest vehicle detection confidence

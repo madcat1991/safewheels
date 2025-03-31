@@ -10,7 +10,7 @@ The `monitor_and_notify.py` script provides real-time monitoring of vehicle dete
 
 - A properly configured SafeWheels system with vehicle detection running
 - A Telegram bot token
-- A Telegram chat ID where notifications will be sent
+- A list of authorized Telegram user IDs who should receive notifications
 
 ### Configuration
 
@@ -23,7 +23,7 @@ Important configuration parameters for this script:
 | `vehicle_id_threshold_sec` | Time threshold in seconds to consider a vehicle detection sequence as complete |
 | `check_interval_sec` | How often (in seconds) the script checks for new completed vehicles |
 | `telegram_token` | Your Telegram bot API token |
-| `telegram_chat_id` | The chat ID where notifications should be sent |
+| `authorized_users` | Array of Telegram user IDs who should receive notifications |
 
 ### Usage
 
@@ -42,7 +42,7 @@ Command-line arguments:
 1. The script periodically checks the database at the interval specified by `check_interval_sec`
 2. It identifies vehicles that haven't been detected for at least `vehicle_id_threshold_sec` seconds (considered "completed")
 3. For each completed vehicle not already processed, it selects the best image based on confidence scores using database ranking
-4. The selected image is sent to the configured Telegram chat with relevant details
+4. The selected image is sent to all authorized Telegram users with relevant details
 5. The script tracks the last processed timestamp to avoid sending duplicate notifications
 
 ### Efficient Implementation
@@ -83,8 +83,10 @@ WantedBy=multi-user.target
 If you're not receiving notifications:
 
 1. Check the Telegram configuration
-   - Verify the bot token and chat ID in config.json
-   - Ensure the bot has permission to send messages to the specified chat
+   - Verify the bot token in config.json
+   - Ensure your Telegram user ID is correctly listed in the `authorized_users` array
+   - Verify that each user ID is a number, not a string (e.g., `123456789`, not `"123456789"`)
+   - Confirm that each authorized user has started a chat with the bot
    - Test the bot by sending it a direct message
 
 2. Check the database setup

@@ -54,13 +54,19 @@ class VehicleMonitor:
 
         # Initialize Telegram bot from config
         self.telegram_token = self.config.get("telegram_token", "")
-        self.chat_id = self.config.get("telegram_chat_id", "")
+        self.authorized_users = self.config.get("authorized_users", [])
 
-        if not self.telegram_token or not self.chat_id:
-            logger.error("Telegram token or chat ID not configured!")
-            raise ValueError("Telegram configuration missing in config file")
+        if not self.telegram_token:
+            logger.error("Telegram token not configured!")
+            raise ValueError("Telegram token missing in config file")
+
+        if not self.authorized_users:
+            logger.error("No authorized Telegram users configured!")
+            raise ValueError("No authorized users specified in config file")
 
         self.bot = telegram.Bot(token=self.telegram_token)
+
+        logger.info(f"Bot will send notifications to {len(self.authorized_users)} authorized users")
 
         # Tracking variables
         self.last_processed_timestamp = 0
@@ -69,7 +75,6 @@ class VehicleMonitor:
         logger.info(f"Images directory: {self.images_dir}")
         logger.info(f"Check interval: {self.check_interval_sec} seconds")
         logger.info(f"Vehicle threshold: {self.vehicle_id_threshold_sec} seconds")
-        logger.info(f"Telegram notifications will be sent to chat ID: {self.chat_id}")
 
     def get_unprocessed_completed_vehicles(self):
         """
@@ -149,50 +154,65 @@ class VehicleMonitor:
 
     def send_notification(self, record):
         """
-        Send a notification with the best image for a vehicle.
+        Send a notification with the best image for a vehicle to all authorized users.
 
         Args:
             record: The record with the best image
 
         Returns:
-            True if notification was sent successfully, False otherwise
+            True if notification was sent successfully to at least one user, False otherwise
         """
-        try:
-            # Get image path
-            image_filename = record.get("image", "")
-            if not image_filename:
-                logger.error("No image filename in record")
-                return False
+        # Get image path
+        image_filename = record.get("image", "")
+        if not image_filename:
+            logger.error("No image filename in record")
+            return False
 
-            image_path = os.path.join(self.images_dir, image_filename)
-            if not os.path.exists(image_path):
-                logger.error(f"Image {image_path} does not exist")
-                return False
+        image_path = os.path.join(self.images_dir, image_filename)
+        if not os.path.exists(image_path):
+            logger.error(f"Image {image_path} does not exist")
+            return False
 
-            # Prepare caption with vehicle details
-            plate_number = record.get("plate_number", "")
-            vehicle_id = record.get("vehicle_id", "")
-            timestamp = record.get("datetime_ms", "")
+        # Prepare caption with vehicle details
+        plate_number = record.get("plate_number", "")
+        vehicle_id = record.get("vehicle_id", "")
+        timestamp = record.get("datetime_ms", "")
 
-            if plate_number:
-                caption = f"🚗 Vehicle detected: {vehicle_id}\n"
-                caption += f"📝 License plate: {plate_number}\n"
-                caption += f"🔢 OCR confidence: {float(record.get('ocr_confidence', 0)):.2f}\n"
-            else:
-                caption = f"🚗 Vehicle detected: {vehicle_id}\n"
-                caption += "⚠️ No license plate recognized\n"
+        if plate_number:
+            caption = f"🚗 Vehicle detected: {vehicle_id}\n"
+            caption += f"📝 License plate: {plate_number}\n"
+            caption += f"🔢 OCR confidence: {float(record.get('ocr_confidence', 0)):.2f}\n"
+        else:
+            caption = f"🚗 Vehicle detected: {vehicle_id}\n"
+            caption += "⚠️ No license plate recognized\n"
 
-            caption += f"⏱️ Time: {timestamp}"
+        caption += f"⏱️ Time: {timestamp}"
 
-            # Send photo
-            with open(image_path, 'rb') as photo:
-                self.bot.send_photo(chat_id=self.chat_id, photo=photo, caption=caption)
+        # Send photo to each authorized user
+        success_count = 0
+        error_count = 0
 
-            logger.info(f"Sent notification for vehicle {vehicle_id}")
+        with open(image_path, 'rb') as photo_file:
+            photo_bytes = photo_file.read()
+
+            for user_id in self.authorized_users:
+                try:
+                    # Create InputFile from bytes to avoid reopening file for each user
+                    photo = telegram.InputFile(photo_bytes, filename=f"{vehicle_id}.jpg")
+                    self.bot.send_photo(chat_id=user_id, photo=photo, caption=caption)
+                    success_count += 1
+                except Exception as user_error:
+                    logger.error(f"Failed to send notification to user {user_id}: {user_error}")
+                    error_count += 1
+
+        if success_count > 0:
+            logger.info(
+                f"Sent notification for vehicle {vehicle_id} to {success_count} users "
+                f"({error_count} errors)"
+            )
             return True
-
-        except Exception as e:
-            logger.error(f"Error sending notification: {e}")
+        else:
+            logger.error(f"Failed to send notification to any users for vehicle {vehicle_id}")
             return False
 
     def process_vehicles(self):

@@ -11,6 +11,9 @@
   "db_filename": "detections.db",
   "images_dirname": "images",
   "telegram_token": "",
-  "telegram_chat_id": "",
+  "authorized_users": [
+    123456789,
+    987654321
+  ],
   "check_interval_sec": 5
 }
