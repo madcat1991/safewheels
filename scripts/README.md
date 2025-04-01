@@ -4,7 +4,7 @@ This directory contains scripts for monitoring and notification capabilities of 
 
 ## Monitor and Notify Script
 
-The `monitor_and_notify.py` script provides real-time monitoring of vehicle detections and sends notifications to Telegram with the best image of each detected vehicle.
+The `monitor_and_notify.py` script provides real-time monitoring of vehicle detections and sends notifications to Telegram with the best image of each detected vehicle. It supports persistence through restarts by saving the last processed timestamp to a file.
 
 ### Prerequisites
 
@@ -24,6 +24,7 @@ Important configuration parameters for this script:
 | `check_interval_sec` | How often (in seconds) the script checks for new completed vehicles |
 | `telegram_token` | Your Telegram bot API token |
 | `authorized_users` | Array of Telegram user IDs who should receive notifications |
+| `timestamp_file` | Name of the file to store the last processed timestamp (for persistence) |
 
 ### Usage
 
@@ -43,7 +44,7 @@ Command-line arguments:
 2. It identifies vehicles that haven't been detected for at least `vehicle_id_threshold_sec` seconds (considered "completed")
 3. For each completed vehicle not already processed, it selects the best image based on confidence scores using database ranking
 4. The selected image is sent to all authorized Telegram users with relevant details
-5. The script tracks the last processed timestamp to avoid sending duplicate notifications
+5. The script tracks the last processed timestamp and saves it to the file specified by `timestamp_file` to avoid sending duplicate notifications and maintain state even if the script is restarted
 
 ### Efficient Implementation
 

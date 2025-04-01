@@ -7,7 +7,8 @@ A Python application for processing video streams and files to detect vehicles a
 - Process RTSP camera streams or video files
 - Vehicle detection using YOLOv8
 - License plate detection using a [pre-trained](https://github.com/Muhammad-Zeerak-Khan/Automatic-License-Plate-Recognition-using-YOLOv8) YOLOv8 model
-- License plate recognition using advanced deep learning OCR
+- License plate recognition using fast-plate-ocr with European plate models
+- GPU acceleration for both detection and recognition (CUDA support)
 - Fast processing with optimized preprocessing pipeline
 - Groups multiple images of the same vehicle to improve recognition accuracy
 - Stores vehicle images and plate information in SQLite database
@@ -19,7 +20,7 @@ A Python application for processing video streams and files to detect vehicles a
 - OpenCV
 - PyTorch
 - Ultralytics YOLOv8
-- EasyOCR
+- fast-plate-ocr
 - PyAV
 - Python-Telegram-Bot
 
@@ -57,7 +58,15 @@ Edit the configuration file at `config/config.json`:
   "images_dirname": "images",
   "check_interval_sec": 5,
   "telegram_token": "",
-  "telegram_chat_id": ""
+  "authorized_users": [
+    123456789,
+    987654321
+  ],
+  "timestamp_file": "last_processed.txt",
+  "use_gpu": true,
+  "batch_size": 4,
+  "model_precision": "fp16",
+  "cuda_device": 0
 }
 ```
 
@@ -69,6 +78,11 @@ Key configuration parameters:
 - `vehicle_id_threshold_sec`: Time threshold to consider a vehicle as complete/unique
 - `db_filename`: Name of the SQLite database file for storing detections
 - `check_interval_sec`: How often to check for new completed vehicles (for notifications)
+- `authorized_users`: Array of Telegram user IDs authorized to receive notifications
+- `timestamp_file`: File to store the timestamp of last processed detection (for persistence across restarts)
+- `use_gpu`: Whether to use GPU acceleration (true/false)
+- `model_precision`: Model precision to use ('fp32' or 'fp16' for faster CUDA processing)
+- `cuda_device`: CUDA device ID to use (0 for primary GPU)
 
 ## Usage
 
@@ -86,6 +100,14 @@ For debugging or offline analysis, you can process a video file:
 
 ```
 python -m safewheels.main --video /path/to/your/video.mp4
+```
+
+### Use a specific configuration file
+
+You can specify a custom configuration file path:
+
+```
+python -m safewheels.main --config /path/to/custom/config.json
 ```
 
 ## Data Storage
