@@ -58,9 +58,33 @@ def main():
 
         input_source = rtsp_url
 
-    # Initialize components
-    vehicle_detector = VehicleDetector()
-    plate_recognizer = DePlateRecognizer()
+    # Initialize components with GPU configuration
+    use_gpu = config.get('use_gpu', True)
+    device_type = config.get('device_type', None)  # Auto-detect if None
+    model_precision = config.get('model_precision', 'fp16')
+    cuda_device = config.get('cuda_device', 0)
+
+    # If CUDA device is specified, update device name
+    device = None
+    if device_type == 'cuda' and cuda_device is not None:
+        device = f'cuda:{cuda_device}'
+    else:
+        device = device_type
+
+    logger.info(f"GPU configuration: use_gpu={use_gpu}, device={device}, precision={model_precision}")
+
+    vehicle_detector = VehicleDetector(
+        use_gpu=use_gpu,
+        device=device,
+        model_precision=model_precision
+    )
+
+    plate_recognizer = DePlateRecognizer(
+        gpu=use_gpu,
+        device=device,
+        model_precision=model_precision
+    )
+
     record_manager = RecordManager(
         storage_path=config.get('storage_path', 'data/vehicles'),
         vehicle_id_threshold_sec=config.get('vehicle_id_threshold_sec', 5),

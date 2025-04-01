@@ -7,6 +7,7 @@ import math
 import cv2
 import re
 import numpy as np
+import torch
 from ultralytics import YOLO
 import easyocr
 
@@ -197,16 +198,20 @@ class DePlateRecognizer:
     Optimized for German license plates with fast processing.
     """
 
-    def __init__(self, gpu=True):
+    def __init__(self, gpu=True, device=None, model_precision='fp16'):
         """
         Initialize the license plate detector and character recognizer.
 
         Args:
             gpu: Whether to use GPU for detection and recognition
+            device: Specific device to use (cuda:0, cuda:1, mps, cpu)
+            model_precision: Model precision (fp32, fp16)
         """
         self.plate_detector = None
         self.reader = None
         self.use_gpu = gpu
+        self.device = device
+        self.model_precision = model_precision
         self.languages = ['de']
 
         # Character confusion maps for text correction
@@ -264,21 +269,58 @@ class DePlateRecognizer:
         """
         Load the YOLOv8 model for license plate detection and initialize EasyOCR.
         """
+        # Determine device if not specified
+        if self.device is None:
+            if self.use_gpu:
+                if torch.cuda.is_available():
+                    self.device = 'cuda:0'
+                    logger.info(f"Using CUDA GPU for plate detection: {torch.cuda.get_device_name(0)}")
+                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    self.device = 'mps'
+                    logger.info("Using Apple MPS for plate detection")
+                else:
+                    self.device = 'cpu'
+                    logger.info("GPU requested but not available. Using CPU for plate detection.")
+            else:
+                self.device = 'cpu'
+                logger.info("Using CPU for plate detection as requested")
+
         # Load YOLOv8 for license plate detection
         try:
-            self.plate_detector = YOLO("yolov8n-lpr.pt")
-            logger.info("Loaded pre-trained YOLOv8 model for license plate detection")
+            # Load with appropriate precision based on device and settings
+            if self.model_precision == 'fp16' and self.device.startswith('cuda'):
+                self.plate_detector = YOLO("yolov8n-lpr.pt").to(self.device).half()
+                logger.info("Loaded YOLOv8 LPR model with FP16 precision")
+            else:
+                self.plate_detector = YOLO("yolov8n-lpr.pt").to(self.device)
+                logger.info(f"Loaded YOLOv8 LPR model on {self.device}")
         except Exception as e:
             logger.error(f"Failed to load license plate detection model: {e}")
             raise
 
         # Initialize EasyOCR reader
         try:
+            # Configure EasyOCR for GPU
+            gpu_param = False
+            if self.use_gpu:
+                if torch.cuda.is_available():
+                    gpu_param = True
+                    # EasyOCR uses CUDA directly, no need to specify the device
+                    logger.info("Using CUDA GPU for OCR")
+                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    # EasyOCR doesn't support MPS yet, but let's try to enable GPU mode anyways
+                    # as it might be supported in future versions
+                    gpu_param = True
+                    logger.info("Using Apple MPS for OCR (may fall back to CPU)")
+
             self.reader = easyocr.Reader(
                 self.languages,
-                gpu=self.use_gpu
+                gpu=gpu_param,
+                # Optimize for better GPU utilization
+                detect_network="craft",
+                recognizer="standard"
             )
-            logger.info(f"Initialized EasyOCR with languages: {self.languages}")
+            logger.info(f"Initialized EasyOCR with languages: {self.languages}, GPU: {gpu_param}")
         except Exception as e:
             logger.error(f"Failed to initialize EasyOCR: {e}")
             raise
