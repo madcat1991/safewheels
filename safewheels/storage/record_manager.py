@@ -78,8 +78,7 @@ class RecordManager:
                 vehicle_confidence REAL NOT NULL,
                 plate_detection_confidence REAL NOT NULL,
                 plate_number TEXT,
-                ocr_confidence REAL NOT NULL,
-                frame_number INTEGER
+                ocr_confidence REAL NOT NULL
             )
             ''')
 
@@ -99,7 +98,7 @@ class RecordManager:
         return uuid.uuid4().hex[:6]  # 6 character hex ID
 
     def add_detection(self, timestamp, vehicle_img, vehicle_confidence=0.0, plate_bbox=None,
-                      plate_detection_confidence=0.0, plate_number=None, ocr_confidence=0.0, frame_number=None):
+                      plate_detection_confidence=0.0, plate_number=None, ocr_confidence=0.0):
         """
         Add a new vehicle detection record and save the image with a bounding box for the license plate.
 
@@ -111,7 +110,6 @@ class RecordManager:
             plate_detection_confidence: Confidence score for plate detection
             plate_number: Recognized license plate text (or None if not recognized)
             ocr_confidence: Confidence score for the OCR recognition
-            frame_number: Optional frame number (for video file processing)
         """
         # Check if we need to generate a new vehicle ID based on time threshold
         if timestamp - self.last_detection_time > self.vehicle_id_threshold_sec:
@@ -169,8 +167,8 @@ class RecordManager:
             INSERT INTO detections (
                 vehicle_id, timestamp, datetime_ms, image,
                 vehicle_confidence, plate_detection_confidence,
-                plate_number, ocr_confidence, frame_number
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                plate_number, ocr_confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 self.current_vehicle_id,
                 timestamp,
@@ -179,8 +177,7 @@ class RecordManager:
                 vehicle_confidence,
                 plate_detection_confidence,
                 plate_number if plate_number else "",
-                ocr_confidence,
-                frame_number
+                ocr_confidence
             ))
 
             conn.commit()

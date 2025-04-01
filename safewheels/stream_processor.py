@@ -9,6 +9,10 @@ from datetime import datetime
 import os.path
 import av
 
+from safewheels.models.detector import VehicleDetector
+from safewheels.models.plate_recognizer import EUPlateRecognizer
+from safewheels.storage.record_manager import RecordManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,7 +20,14 @@ class StreamProcessor:
     """
     Processes video streams and files to detect vehicles and recognize license plates.
     """
-    def __init__(self, input_source, vehicle_detector, plate_recognizer, record_manager, config):
+    def __init__(
+            self,
+            input_source,
+            vehicle_detector: VehicleDetector,
+            plate_recognizer: EUPlateRecognizer,
+            record_manager: RecordManager,
+            config
+            ):
         """
         Initialize StreamProcessor.
 
@@ -125,8 +136,8 @@ class StreamProcessor:
                     else:
                         logger.info(f"Stream FPS: {fps}. Processing every {self.process_every_n_frames}th frame.")
 
-                    frame_count = 0
-                    frames_processed = 0
+                    # Counter for processing every nth frame
+                    nth_frame_counter = 0
 
                     # Use non-strict decoding to handle problematic H.265 streams
                     for packet in container.demux(video=0):
@@ -142,36 +153,30 @@ class StreamProcessor:
                                 if not self._running:
                                     break
 
-                                frame_count += 1
+                                # Use modulo counter to track every nth frame
+                                nth_frame_counter = (nth_frame_counter + 1) % self.process_every_n_frames
 
-                                # Process every nth frame
-                                if frame.key_frame or frame_count % self.process_every_n_frames == 0:
+                                # Process key frames and every nth frame
+                                if frame.key_frame or nth_frame_counter == 0:
                                     try:
                                         # Convert PyAV frame to OpenCV format
                                         img = frame.to_ndarray(format='bgr24')
 
                                         # Process the frame
                                         timestamp = time.time()
-                                        self._process_frame(img, timestamp, frame_count)
-                                        frames_processed += 1
+                                        self._process_frame(img, timestamp)
 
                                         frame_type = "I-frame" if frame.key_frame else "frame"
-                                        if self.is_file and total_frames:
-                                            logger.info(
-                                                f"Processed {frame_type} {frame_count}/{total_frames} "
-                                                f"(#{frames_processed})"
-                                            )
-                                        else:
-                                            logger.info(f"Processed {frame_type} (#{frames_processed})")
+                                        logger.debug(f"Processed {frame_type}")
                                     except Exception as e:
-                                        logger.error(f"Error processing frame {frame_count}: {e}")
+                                        logger.error(f"Error processing frame: {e}")
                         except av.AVError as e:
                             # Handle decoding errors for this packet but continue with next
-                            logger.warning(f"Decoding error in frame {frame_count}: {e} - skipping packet")
+                            logger.warning(f"Decoding error: {e} - skipping packet")
 
                     # If we're processing a file and reached the end
                     if self.is_file:
-                        logger.info(f"Finished processing file. Total frames processed: {frames_processed}")
+                        logger.info("Finished processing file")
                         self._running = False
                         break
                     else:
@@ -219,14 +224,13 @@ class StreamProcessor:
                     logger.warning(f"Unexpected error: {e}. Attempting to reconnect in 5 seconds...")
                     time.sleep(5)
 
-    def _process_frame(self, frame, timestamp, frame_count=None):
+    def _process_frame(self, frame, timestamp):
         """
         Process a single video frame.
 
         Args:
             frame: OpenCV image frame
             timestamp: Current timestamp
-            frame_count: Frame number (for video files)
         """
         # Detect vehicles
         vehicles = self.vehicle_detector.detect(frame, self.vehicle_confidence_threshold)
@@ -235,8 +239,7 @@ class StreamProcessor:
             return
 
         timestamp_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-        frame_info = f" (frame {frame_count})" if frame_count is not None else ""
-        logger.info(f"Detected {len(vehicles)} vehicles at {timestamp_str}{frame_info}")
+        logger.info(f"Detected {len(vehicles)} vehicles at {timestamp_str}")
 
         # Process each detected vehicle
         for i, vehicle in enumerate(vehicles):
@@ -263,8 +266,7 @@ class StreamProcessor:
                 plate_bbox=plate_bbox,
                 plate_detection_confidence=plate_detection_confidence,
                 plate_number=plate_number,
-                ocr_confidence=ocr_confidence,
-                frame_number=frame_count
+                ocr_confidence=ocr_confidence
             )
 
     def _crop_vehicle(self, frame, vehicle):
