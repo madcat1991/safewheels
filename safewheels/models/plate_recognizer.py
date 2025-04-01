@@ -213,7 +213,7 @@ class EUPlateRecognizer:
             results = self.ocr_recognizer.run(preprocessed_img, return_confidence=True)
 
             # Extract text and confidence values
-            plate_text = results[0][0]
+            plate_text = results[0][0].rstrip("_")
             confidence = results[1].mean()
 
             logger.debug(f"OCR result: {plate_text} with confidence {confidence:.2f}")

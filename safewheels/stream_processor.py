@@ -41,7 +41,7 @@ class StreamProcessor:
         self.plate_detection_threshold = config.get('plate_detection_threshold', 0.3)
         self.ocr_confidence_threshold = config.get('ocr_confidence_threshold', 0.2)
 
-        # Process every nth frame (default: 5)
+        # Process every nth frame
         self.process_every_n_frames = config.get('process_every_n_frames', 5)
 
         logger.info(
@@ -144,7 +144,7 @@ class StreamProcessor:
 
                                 frame_count += 1
 
-                                # Process every nth frame (prioritizing I-frames when possible)
+                                # Process every nth frame
                                 if frame.key_frame or frame_count % self.process_every_n_frames == 0:
                                     try:
                                         # Convert PyAV frame to OpenCV format
