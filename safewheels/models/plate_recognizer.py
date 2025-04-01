@@ -1,200 +1,19 @@
 """
-License plate detection and character recognition using YOLOv8 for detection and EasyOCR for OCR.
-Optimized for speed and accuracy with European license plates (primarily English and German).
+License plate detection and character recognition using YOLOv8 for detection and fast-plate-ocr for text recognition.
+Optimized for speed and accuracy with European license plates.
 """
 import logging
-import math
-import cv2
-import re
-import numpy as np
 import torch
+import cv2
 from ultralytics import YOLO
-import easyocr
+from fast_plate_ocr import ONNXPlateRecognizer
 
 logger = logging.getLogger(__name__)
 
 
-MIN_PLATE_LEN = 2
-
-
-def rotate_image(image, angle):
-    """Rotate an image around its center by the given angle.
-
-    Args:
-        image: The input image (numpy array)
-        angle: The rotation angle in degrees (positive = counterclockwise)
-
-    Returns:
-        The rotated image
+class EUPlateRecognizer:
     """
-    if image is None or image.size == 0:
-        return image
-
-    # Calculate image center
-    image_center = tuple(np.array(image.shape[1::-1]) / 2)
-
-    # Calculate new image dimensions to avoid cropping
-    height, width = image.shape[:2]
-    cos_angle = abs(np.cos(np.radians(angle)))
-    sin_angle = abs(np.sin(np.radians(angle)))
-    new_width = int(width * cos_angle + height * sin_angle)
-    new_height = int(height * cos_angle + width * sin_angle)
-
-    # Get rotation matrix
-    rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
-
-    # Adjust the rotation matrix to account for new dimensions
-    rot_mat[0, 2] += (new_width - width) / 2
-    rot_mat[1, 2] += (new_height - height) / 2
-
-    # Perform the rotation with border replication to avoid artifacts
-    result = cv2.warpAffine(
-        image,
-        rot_mat,
-        (new_width, new_height),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE
-    )
-
-    return result
-
-
-def compute_skew(src_img, max_angle_deg=30):
-    """Compute the skew angle of text in an image.
-
-    Args:
-        src_img: Source image (numpy array)
-        max_angle_deg: Maximum angle to consider as valid skew (degrees)
-
-    Returns:
-        Estimated skew angle in degrees
-    """
-    if src_img is None or src_img.size == 0:
-        return 0.0
-
-    try:
-        # Determine image dimensions
-        if len(src_img.shape) == 3:
-            h, w, _ = src_img.shape
-        elif len(src_img.shape) == 2:
-            h, w = src_img.shape
-        else:
-            logger.warning("Unsupported image type for skew detection")
-            return 0.0
-
-        # Ensure minimum size for processing
-        if h < 20 or w < 20:
-            return 0.0
-
-        # Convert to grayscale if needed
-        if len(src_img.shape) == 3:
-            gray = cv2.cvtColor(src_img, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = src_img.copy()
-
-        # Apply median blur to reduce noise while preserving edges
-        img = cv2.medianBlur(gray, 3)
-
-        # Binarize the image to enhance edge detection
-        _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-        # Detect edges using Canny
-        edges = cv2.Canny(binary, threshold1=30, threshold2=100, apertureSize=3, L2gradient=True)
-
-        # Find lines using probabilistic Hough transform
-        # Adjust parameters based on image dimensions
-        min_line_length = max(w / 6.0, 20)  # Min line length should be proportional to image width
-        max_line_gap = max(h / 6.0, 10)     # Max gap between line segments
-
-        lines = cv2.HoughLinesP(
-            edges,
-            rho=1,
-            theta=math.pi/180,
-            threshold=max(30, min(h, w) // 10),  # Adaptive threshold based on image size
-            minLineLength=min_line_length,
-            maxLineGap=max_line_gap
-        )
-
-        if lines is None or len(lines) == 0:
-            return 0.0
-
-        # Process detected lines to compute skew
-        angles = []
-        max_angle_rad = math.radians(max_angle_deg)
-
-        for line in lines:
-            for x1, y1, x2, y2 in line:
-                # Skip vertical and near-vertical lines
-                if abs(x2 - x1) < 5:
-                    continue
-
-                # Calculate angle
-                ang = np.arctan2(y2 - y1, x2 - x1)
-
-                # Normalize angle to be between -pi/2 and pi/2
-                while ang < -math.pi/2:
-                    ang += math.pi
-                while ang > math.pi/2:
-                    ang -= math.pi
-
-                # Only consider angles within max_angle_rad
-                if abs(ang) <= max_angle_rad:
-                    angles.append(ang)
-
-        if len(angles) == 0:
-            return 0.0
-
-        # Use median angle to reduce impact of outliers
-        median_angle = np.median(angles)
-        return math.degrees(median_angle)
-
-    except Exception as e:
-        logger.error(f"Error in skew detection: {e}")
-        return 0.0
-
-
-def deskew(src_img, max_angle_deg=30):
-    """Correct the skew in an image by rotating it to align text horizontally.
-
-    Args:
-        src_img: Source image (numpy array)
-        max_angle_deg: Maximum angle to consider as valid skew (degrees)
-
-    Returns:
-        Deskewed image
-    """
-    if src_img is None or src_img.size == 0:
-        return src_img
-
-    try:
-        # Compute skew angle
-        angle = compute_skew(src_img, max_angle_deg)
-
-        # Skip rotation if angle is very small (reduces unnecessary processing)
-        if abs(angle) < 0.5:
-            return src_img
-
-        # Apply rotation to correct skew
-        deskewed_img = rotate_image(src_img, angle)
-
-        # Ensure we didn't create a much larger image
-        orig_size = src_img.size
-        new_size = deskewed_img.size
-
-        # If new image is more than 50% larger, revert to original
-        if new_size > orig_size * 1.5:
-            logger.warning("Deskewed image size increased significantly, using original")
-            return src_img
-
-        return deskewed_img
-    except Exception as e:
-        logger.error(f"Error in deskew: {e}")
-        return src_img
-
-
-class DePlateRecognizer:
-    """
-    Detects and recognizes license plates using YOLOv8 for detection and EasyOCR for OCR.
+    Detects and recognizes license plates using YOLOv8 for detection and fast-plate-ocr for OCR.
     Optimized for German license plates with fast processing.
     """
 
@@ -208,66 +27,17 @@ class DePlateRecognizer:
             model_precision: Model precision (fp32, fp16)
         """
         self.plate_detector = None
-        self.reader = None
+        self.ocr_recognizer: ONNXPlateRecognizer = None
         self.use_gpu = gpu
         self.device = device
         self.model_precision = model_precision
-        self.languages = ['de']
-
-        # Character confusion maps for text correction
-        self.digit_to_letter = {'0': 'O', '1': 'I', '8': 'B', '5': 'S', '2': 'Z'}
-        self.letter_to_digit = {'O': '0', 'I': '1', 'B': '8', 'S': '5', 'Z': '2'}
-
-        # Common German city codes with umlauts
-        self.umlaut_corrections = {
-            "AO": "AÖ",  # Altötting
-            "BUD": "BÜD",  # Büdingen
-            "BUR": "BÜR",  # Büren
-            "BUS": "BÜS",  # Büsingen
-            "BUZ": "BÜZ",  # Bützow
-            "DUW": "DÜW",  # Bad Dürkheim an der Weinstraße
-            "FLO": "FLÖ",  # Flöha
-            "FU": "FÜ",  # Fürth
-            "FUS": "FÜS",  # Füssen
-            "GU": "GÜ",  # Güstrow
-            "HMU": "HÜM",  # Hann. Münden
-            "HOS": "HÖS",  # Höchstadt
-            "JUL": "JÜL",  # Jülich
-            "KON": "KÖN",  # Bad Königshofen
-            "KOT": "KÖT",  # Köthen
-            "KOZ": "KÖZ",  # Bad Kötzting
-            "KUN": "KÜN",  # Künzelsau
-            "LO": "LÖ",  # Lörrach
-            "LOB": "LÖB",  # Löbau
-            "LUN": "LÜN",  # Lünen
-            "MU": "MÜ",  # Mühldorf
-            "MUB": "MÜB",  # Münchberg
-            "MUR": "MÜR",  # Müritz
-            "NO": "NÖ",  # Nördlingen
-            "PLO": "PLÖ",  # Plön
-            "PRU": "PRÜ",  # Prüm
-            "RUD": "RÜD",  # Rüdesheim
-            "RUG": "RÜG",  # Rügen
-            "SAK": "SÄK",  # Bad Säckingen
-            "SLU": "SLÜ",  # Schlüchtern
-            "SMU": "SMÜ",  # Schwabmünchen
-            "SOM": "SÖM",  # Sömmerda
-            "SUW": "SÜW",  # Südliche Weinstraße
-            "TOL": "TÖL",  # Bad Tölz
-            "TU": "TÜ",  # Tübingen
-            "UB": "ÜB",  # Überlingen
-            "WU": "WÜ",  # Würzburg
-            "WUM": "WÜM",  # Waldmünchen
-        }
-
-        # Common license plate patterns
-        self.plate_pattern = r'^(?:[A-ZÄÖÜ]{1,3}[-\s]?[A-Z]{1,2}[-\s]?\d{1,4}[HE]?|[0,1]-\d{1,5}|Y-\d{1,6})$'
+        self.model_name = 'european-plates-mobile-vit-v2-model'  # Using the European plate model
 
         self._load_models()
 
     def _load_models(self):
         """
-        Load the YOLOv8 model for license plate detection and initialize EasyOCR.
+        Load the YOLOv8 model for license plate detection and initialize fast-plate-ocr.
         """
         # Determine device if not specified
         if self.device is None:
@@ -298,34 +68,24 @@ class DePlateRecognizer:
             logger.error(f"Failed to load license plate detection model: {e}")
             raise
 
-        # Initialize EasyOCR reader
+        # Initialize fast-plate-ocr with GPU setting
         try:
-            # Configure EasyOCR for GPU
-            gpu_param = False
-            if self.use_gpu:
-                if torch.cuda.is_available():
-                    gpu_param = True
-                    # EasyOCR uses CUDA directly, no need to specify the device
-                    logger.info("Using CUDA GPU for OCR")
-                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                    # EasyOCR doesn't support MPS yet, but let's try to enable GPU mode anyways
-                    # as it might be supported in future versions
-                    gpu_param = True
-                    logger.info("Using Apple MPS for OCR (may fall back to CPU)")
+            # Create a recognizer with the European model
+            # Determine which device to use for fast-plate-ocr
+            ocr_device = "cpu"
+            if self.use_gpu and self.device.startswith('cuda'):
+                ocr_device = "cuda"
 
-            self.reader = easyocr.Reader(
-                self.languages,
-                gpu=gpu_param,
-                # Optimize for better GPU utilization
-                detect_network="craft",
-                recognizer="standard"
+            self.ocr_recognizer = ONNXPlateRecognizer(
+                hub_ocr_model=self.model_name,
+                device=ocr_device  # Using the 'device' parameter with "cuda" or "cpu"
             )
-            logger.info(f"Initialized EasyOCR with languages: {self.languages}, GPU: {gpu_param}")
+            logger.info(f"Initialized fast-plate-ocr with model: {self.model_name}, device: {ocr_device}")
         except Exception as e:
-            logger.error(f"Failed to initialize EasyOCR: {e}")
+            logger.error(f"Failed to initialize fast-plate-ocr: {e}")
             raise
 
-    def detect_plate(self, vehicle_img, confidence_threshold):
+    def _detect_plate(self, vehicle_img, confidence_threshold):
         """
         Detect license plate in a vehicle image using YOLOv8.
 
@@ -411,205 +171,28 @@ class DePlateRecognizer:
             logger.error(f"Error during license plate detection: {e}")
             return None, None, 0.0
 
-    def _preprocess_plate(self, plate_img):
+    def _preprocess_plate_for_ocr(self, plate_img):
         """
-        Preprocess the license plate image for better character recognition.
-        Optimized with multiple processing steps to improve OCR accuracy.
+        Preprocess the license plate image for OCR.
+        The fast-plate-ocr library expects a grayscale image (H, W) or (H, W, 1).
 
         Args:
             plate_img: Cropped license plate image
 
         Returns:
-            Dictionary of preprocessed images with processing type as key
+            Preprocessed grayscale plate image
         """
-        if plate_img is None:
-            return {}
-
-        try:
-            processed_images = {}
-
-            # Resize to appropriate size for OCR while maintaining aspect ratio
-            height, width = plate_img.shape[:2]
-
-            # Enhanced resizing for better OCR results
-            new_width = 400  # Optimal width for OCR
-            new_height = int(height * (new_width / width))
-
-            # Ensure the height is at least 50px for better OCR results
-            if new_height < 50:
-                scale_factor = 50 / new_height
-                new_height = 50
-                new_width = int(new_width * scale_factor)
-
-            # Use INTER_CUBIC for upsampling to get sharper text edges
-            resized = cv2.resize(
-                plate_img,
-                (new_width, new_height),
-                interpolation=cv2.INTER_CUBIC
-            )
-            processed_images['resized'] = resized
-
-            # Convert to grayscale
-            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) > 2 else resized
-            processed_images['gray'] = gray
-
-            # Apply CLAHE for better contrast
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            enhanced = clahe.apply(gray)
-            processed_images['enhanced'] = enhanced
-
-            # Apply Gaussian blur to remove noise
-            blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
-            processed_images['blurred'] = blurred
-
-            # Otsu's thresholding for optimal binarization
-            _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            processed_images['binary'] = otsu
-
-            # Add adaptive thresholding which often works better for uneven lighting
-            adaptive = cv2.adaptiveThreshold(
-                blurred,
-                255,
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY,
-                11,
-                2
-            )
-            processed_images['adaptive'] = adaptive
-
-            return processed_images
-
-        except Exception as e:
-            logger.error(f"Error during image preprocessing: {e}")
-            # Return original image if preprocessing fails
-            if plate_img is not None and len(plate_img.shape) >= 2:
-                return {'original': plate_img}
-            return {}
-
-    def _clean_plate_text(self, text):
-        """
-        Clean and normalize license plate text with improved character correction.
-
-        Args:
-            text: Raw text from OCR
-
-        Returns:
-            Cleaned license plate string
-        """
-        if not text:
-            return None
-
-        # Convert to uppercase
-        text = text.upper()
-
-        # Apply corrections only if the result looks like a plate
-        # German plates typically start with 1-3 letters (city code) followed by separators and identifier
-        if re.match(r'^[A-ZÄÖÜ0-9]{1,3}[-\s]?', text):
-            # This is likely a German plate, apply city code corrections
-            first_part_match = re.match(r'^([A-ZÄÖÜ0-9]{1,3})', text)
-            if first_part_match:
-                first_part = first_part_match.group(1)
-                rest_of_text = text[len(first_part):]
-
-                # First handle digit corrections in the city code (except for '0' and '1')
-                if first_part not in ('0', '1'):
-                    for digit, letter in self.digit_to_letter.items():
-                        first_part = first_part.replace(digit, letter)
-
-                # Apply the umlaut correction if this is a known city code
-                if first_part in self.umlaut_corrections:
-                    logger.debug(f"Correcting city code: {first_part} -> {self.umlaut_corrections[first_part]}")
-                    first_part = self.umlaut_corrections[first_part]
-
-                # If there's a dash followed by digits at the end, apply specific corrections
-                num_part_match = re.search(r'-([A-Z0-9]+)$', rest_of_text)
-                if num_part_match:
-                    num_part = num_part_match.group(1)
-                    num_part_start = rest_of_text.rfind('-' + num_part)
-
-                    # Apply opposite corrections in the numeric part
-                    # In this part, change 'O' to '0', 'I' to '1', etc.
-                    corrected_num = num_part
-                    for letter, digit in self.letter_to_digit.items():
-                        corrected_num = corrected_num.replace(letter, digit)
-
-                    rest_of_text = rest_of_text[:num_part_start+1] + corrected_num
-
-                cleaned_text = first_part + rest_of_text
-            else:
-                cleaned_text = text
+        # Convert to grayscale if it's a color image
+        if len(plate_img.shape) == 3 and plate_img.shape[2] == 3:
+            gray_plate = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
         else:
-            cleaned_text = text
+            gray_plate = plate_img
 
-        # Check minimum length to be a valid plate
-        if len(cleaned_text) < MIN_PLATE_LEN:
-            return None
+        return gray_plate
 
-        return cleaned_text
-
-    def _is_valid_plate(self, plate_text):
+    def _recognize_characters(self, plate_img, confidence_threshold=0.3):
         """
-        Validate if the text looks like a license plate.
-
-        Args:
-            plate_text: Cleaned plate text
-
-        Returns:
-            Boolean indicating if text pattern matches a license plate
-        """
-        if not plate_text or len(plate_text) < MIN_PLATE_LEN:
-            return False
-
-        # Check against known patterns
-        if re.match(self.plate_pattern, plate_text):
-            return True
-
-        return False
-
-    def _run_ocr_on_image(self, img, allowed_chars, use_beam_search=False):
-        """
-        Run OCR on a single preprocessed image.
-
-        Args:
-            img: Image to process
-            allowed_chars: String of allowed characters
-            use_beam_search: Whether to use beam search decoder (slower but more accurate)
-
-        Returns:
-            List of (text, confidence, method) tuples
-        """
-        try:
-            # Convert to RGB for EasyOCR if needed
-            if len(img.shape) == 2:  # If grayscale
-                img_for_ocr = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-            else:
-                img_for_ocr = img
-
-            decoder = 'beamsearch' if use_beam_search else 'greedy'
-            decoder_args = {'beamWidth': 5} if use_beam_search else {}
-
-            detection_results = self.reader.readtext(
-                img_for_ocr,
-                detail=1,  # Return bounding boxes and confidences
-                paragraph=False,  # Treat each text box separately
-                decoder=decoder,
-                allowlist=allowed_chars,
-                batch_size=1,  # Process one image at a time
-                mag_ratio=1.5,  # Moderate magnification ratio for speed
-                canvas_size=1280,  # Smaller canvas size for faster processing
-                contrast_ths=0.2,  # Lower contrast threshold for low contrast plates
-                adjust_contrast=1.3,  # Moderate contrast adjustment
-                **decoder_args
-            )
-
-            return detection_results
-        except Exception as e:
-            logger.debug(f"EasyOCR error with {decoder} decoder: {e}")
-            return []
-
-    def recognize_characters(self, plate_img, confidence_threshold=0.3):
-        """
-        Recognize characters on the license plate using EasyOCR.
+        Recognize characters on the license plate using fast-plate-ocr.
 
         Args:
             plate_img: Cropped license plate image
@@ -619,72 +202,32 @@ class DePlateRecognizer:
             Tuple of (plate_number, confidence)
             If no characters are recognized, returns (None, 0.0)
         """
-        if plate_img is None or plate_img.size == 0:
-            return None, 0.0
-
+        # Using version >= 0.3.0 which provides confidence scores
         try:
-            # Apply deskew with a reasonable angle limit for license plates
-            plate_img = deskew(plate_img, max_angle_deg=15)
-
-            # Preprocess the plate image for OCR - returns a dictionary of processed images
-            processed_images = self._preprocess_plate(plate_img)
-            if not processed_images:
+            # Preprocess the plate image for OCR
+            preprocessed_img = self._preprocess_plate_for_ocr(plate_img)
+            if preprocessed_img is None:
                 return None, 0.0
 
-            all_results = []
-            allowed_chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ0123456789-'
+            # Run with confidence information
+            results = self.ocr_recognizer.run(preprocessed_img, return_confidence=True)
 
-            # Process each image variant with EasyOCR
-            for img_type, img in processed_images.items():
-                # Run OCR with greedy decoder (faster)
-                detection_results = self._run_ocr_on_image(
-                    img, allowed_chars, use_beam_search=False
-                )
+            # Extract text and confidence values
+            plate_text = results[0][0]
+            confidence = results[1].mean()
 
-                # Process results
-                for box, text, confidence in detection_results:
-                    if confidence >= confidence_threshold:
-                        cleaned_text = self._clean_plate_text(text)
-                        if cleaned_text:
-                            all_results.append((cleaned_text, confidence, f"easyocr-{img_type}"))
+            logger.debug(f"OCR result: {plate_text} with confidence {confidence:.2f}")
 
-            if len(all_results) <= 1:
-                # Try with beam search for higher accuracy on challenging plates
-                for img_type in ['enhanced', 'binary', 'adaptive']:
-                    img = processed_images.get(img_type)
-                    if img is not None:
-                        beam_results = self._run_ocr_on_image(
-                            img, allowed_chars, use_beam_search=True
-                        )
-                        for box, text, confidence in beam_results:
-                            if confidence >= confidence_threshold:
-                                cleaned_text = self._clean_plate_text(text)
-                                if cleaned_text:
-                                    all_results.append((cleaned_text, confidence, f"easyocr-beam-{img_type}"))
-
-            if len(all_results) == 0:
-                logger.debug(f"No text with confidence >= {confidence_threshold} detected")
+            # Skip if confidence is too low
+            if confidence < confidence_threshold:
+                logger.debug(f"OCR confidence too low: {confidence:.2f} < {confidence_threshold}")
                 return None, 0.0
-
-            # Order by confidence
-            all_results.sort(key=lambda x: x[1], reverse=True)
-
-            # Find the first valid license plate format
-            for text, conf, method in all_results:
-                if self._is_valid_plate(text):
-                    logger.debug(f"Valid plate detected: {text} (conf: {conf:.2f}, method: {method})")
-                    return text, conf
-
-            # If no valid plates, return the highest confidence result
-            best_result = all_results[0]
-            logger.debug(
-                f"Best plate candidate: {best_result[0]} (conf: {best_result[1]:.2f}, method: {best_result[2]})"
-            )
-            return best_result[0], best_result[1]
 
         except Exception as e:
-            logger.error(f"Error during character recognition: {e}")
+            logger.error(f"fast-plate-ocr recognition error: {e}")
             return None, 0.0
+
+        return plate_text, confidence
 
     def recognize(self, vehicle_img, confidence_threshold=0.4, ocr_confidence_threshold=0.3):
         """
@@ -701,14 +244,14 @@ class DePlateRecognizer:
         """
         try:
             # Detect license plate
-            plate_img, plate_bbox, plate_confidence = self.detect_plate(
+            plate_img, plate_bbox, plate_confidence = self._detect_plate(
                 vehicle_img, confidence_threshold)
 
             if plate_img is None or plate_bbox is None:
                 return None, None, 0.0, None, 0.0
 
             # Recognize characters on the plate
-            plate_number, ocr_confidence = self.recognize_characters(
+            plate_number, ocr_confidence = self._recognize_characters(
                 plate_img, ocr_confidence_threshold)
 
             if plate_number:

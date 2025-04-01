@@ -9,7 +9,7 @@ import os.path
 
 from safewheels.stream_processor import StreamProcessor
 from safewheels.models.detector import VehicleDetector
-from safewheels.models.plate_recognizer import DePlateRecognizer
+from safewheels.models.plate_recognizer import EUPlateRecognizer
 from safewheels.storage.record_manager import RecordManager
 from safewheels.utils.config import load_config
 
@@ -79,7 +79,7 @@ def main():
         model_precision=model_precision
     )
 
-    plate_recognizer = DePlateRecognizer(
+    plate_recognizer = EUPlateRecognizer(
         gpu=use_gpu,
         device=device,
         model_precision=model_precision
