@@ -9,8 +9,8 @@ from datetime import datetime
 import os.path
 import av
 
-from safewheels.models.detector import VehicleDetector
-from safewheels.models.plate_recognizer import EUPlateRecognizer
+from safewheels.models.vehicle_detector import VehicleDetector
+from safewheels.models.plate_detector import PlateDetector
 from safewheels.storage.record_manager import RecordManager
 
 logger = logging.getLogger(__name__)
@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 
 class StreamProcessor:
     """
-    Processes video streams and files to detect vehicles and recognize license plates.
+    Processes video streams and files to detect vehicles and their license plates.
     """
     def __init__(
             self,
             input_source,
             vehicle_detector: VehicleDetector,
-            plate_recognizer: EUPlateRecognizer,
+            plate_detector: PlateDetector,
             record_manager: RecordManager,
             config
             ):
@@ -34,30 +34,29 @@ class StreamProcessor:
         Args:
             input_source: RTSP stream URL or video file path
             vehicle_detector: VehicleDetector instance
-            plate_recognizer: PlateRecognizer instance
+            plate_recognizer: PlateDetector instance
             record_manager: RecordManager for storing detection results
             config: Application configuration dictionary
         """
         self.input_source = input_source
         self.vehicle_detector = vehicle_detector
-        self.plate_recognizer = plate_recognizer
+        self.plate_detector = plate_detector
         self.record_manager = record_manager
         self.config = config
 
         # Determine if source is a video file or a stream
         self.is_file = os.path.isfile(input_source) if isinstance(input_source, str) else False
 
-        # Processing parameters - thresholds for each stage of detection/recognition
+        # Processing parameters - thresholds for each stage of detection
         self.vehicle_confidence_threshold = config.get('vehicle_confidence_threshold', 0.4)
         self.plate_detection_threshold = config.get('plate_detection_threshold', 0.3)
-        self.ocr_confidence_threshold = config.get('ocr_confidence_threshold', 0.2)
 
         # Process every nth frame
         self.process_every_n_frames = config.get('process_every_n_frames', 5)
 
         logger.info(
-            f"Detection thresholds: vehicle={self.vehicle_confidence_threshold}, " +
-            f"license_plate={self.plate_detection_threshold}, ocr={self.ocr_confidence_threshold}"
+            f"Detection thresholds: vehicle={self.vehicle_confidence_threshold}, "
+            f"license_plate={self.plate_detection_threshold}"
         )
 
         # Thread control
@@ -302,14 +301,11 @@ class StreamProcessor:
             # Get vehicle detection confidence
             vehicle_confidence = vehicle['confidence']
 
-            # Attempt license plate recognition
-            # Get plate image, bbox, and recognition results
-            res = self.plate_recognizer.recognize(
+            # Detect license plate using the detector part of the plate recognizer
+            plate_bbox, plate_confidence = self.plate_detector.detect(
                 vehicle_img,
-                self.plate_detection_threshold,
-                self.ocr_confidence_threshold
+                self.plate_detection_threshold
             )
-            plate_img, plate_bbox, plate_detection_confidence, plate_number, ocr_confidence = res
 
             # skip images with bad plate positions
             if not self._is_good_plate_position(vehicle_img, plate_bbox):
@@ -321,9 +317,7 @@ class StreamProcessor:
                 vehicle_img=vehicle_img,
                 vehicle_confidence=vehicle_confidence,
                 plate_bbox=plate_bbox,
-                plate_detection_confidence=plate_detection_confidence,
-                plate_number=plate_number,
-                ocr_confidence=ocr_confidence
+                plate_confidence=plate_confidence
             )
 
     def _crop_vehicle(self, frame, vehicle):

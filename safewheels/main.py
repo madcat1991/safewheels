@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Main module for SafeWheels - video stream and file processing for vehicle detection and license plate recognition.
+Main module for SafeWheels - video stream and file processing for vehicle and license plate detection.
 """
 import time
 import logging
@@ -8,8 +8,8 @@ import argparse
 import os.path
 
 from safewheels.stream_processor import StreamProcessor
-from safewheels.models.detector import VehicleDetector
-from safewheels.models.plate_recognizer import EUPlateRecognizer
+from safewheels.models.vehicle_detector import VehicleDetector
+from safewheels.models.plate_detector import PlateDetector
 from safewheels.storage.record_manager import RecordManager
 from safewheels.utils.config import load_config
 
@@ -79,7 +79,7 @@ def main():
         model_precision=model_precision
     )
 
-    plate_recognizer = EUPlateRecognizer(
+    plate_detector = PlateDetector(
         gpu=use_gpu,
         device=device,
         model_precision=model_precision
@@ -96,7 +96,7 @@ def main():
     processor = StreamProcessor(
         input_source=input_source,
         vehicle_detector=vehicle_detector,
-        plate_recognizer=plate_recognizer,
+        plate_detector=plate_detector,
         record_manager=record_manager,
         config=config
     )
