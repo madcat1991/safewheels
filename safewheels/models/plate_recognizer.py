@@ -3,6 +3,7 @@ License plate detection and character recognition using YOLOv8 for detection and
 Optimized for speed and accuracy with European license plates.
 """
 import logging
+import numpy as np
 import torch
 import cv2
 from ultralytics import YOLO
@@ -214,7 +215,7 @@ class EUPlateRecognizer:
 
             # Extract text and confidence values
             plate_text = results[0][0].rstrip("_")
-            confidence = results[1].mean()
+            confidence = float(np.median(results[1]))
 
             logger.debug(f"OCR result: {plate_text} with confidence {confidence:.2f}")
 

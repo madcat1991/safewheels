@@ -64,7 +64,6 @@ Edit the configuration file at `config/config.json`:
   ],
   "timestamp_file": "last_processed.txt",
   "use_gpu": true,
-  "batch_size": 4,
   "model_precision": "fp16",
   "cuda_device": 0
 }

@@ -56,11 +56,11 @@ class VehicleDetector:
         # Load model with appropriate precision
         if self.model_precision == 'fp16' and self.device.startswith('cuda'):
             # Half precision for faster inference on supported GPUs
-            self.model = YOLO("yolov8n.pt").to(self.device).half()
+            self.model = YOLO("yolov8s.pt").to(self.device).half()
             logger.info("Loaded YOLOv8s model with FP16 precision")
         else:
             # Standard FP32 precision
-            self.model = YOLO("yolov8n.pt").to(self.device)
+            self.model = YOLO("yolov8s.pt").to(self.device)
             logger.info(f"Loaded YOLOv8s model on {self.device} with FP32 precision")
 
     def detect(self, image, confidence_threshold=0.5):
