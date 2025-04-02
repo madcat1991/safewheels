@@ -1,6 +1,5 @@
-#!/usr/bin/env python
 """
-Main module for SafeWheels - video stream and file processing for vehicle and license plate detection.
+Video stream and file processing for vehicle and license plate detection.
 """
 import time
 import logging
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 def main():
     """Main execution function for SafeWheels."""
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='SafeWheels - Vehicle and license plate detection')
+    parser = argparse.ArgumentParser(description='Vehicle and license plate detection script')
     parser.add_argument('--video', type=str, help='Path to video file for processing')
     parser.add_argument('--config', type=str, help='Path to configuration file')
     args = parser.parse_args()
