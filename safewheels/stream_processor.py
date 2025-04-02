@@ -224,6 +224,55 @@ class StreamProcessor:
                     logger.warning(f"Unexpected error: {e}. Attempting to reconnect in 5 seconds...")
                     time.sleep(5)
 
+    def _is_good_aspect_ratio(self, vehicle_bbox, threshold=0.8):
+        """
+        Check if the vehicle image is suitable for processing based on its aspect ratio.
+
+        Args:
+            vehicle_img: Cropped vehicle image
+
+        Returns:
+            bool: True if the detection is valid, False otherwise
+        """
+        # Skip too vertical images (height significantly larger than width)
+        x, y, w, h = vehicle_bbox
+        aspect_ratio = w / h if h > 0 else 0
+        return aspect_ratio >= threshold
+
+    def _is_good_plate_position(self, vehicle_img, plate_bbox):
+        """
+        Check if the result of a detection is suitable for processing.
+
+        Args:
+            vehicle_img: Cropped vehicle image
+            plate_bbox: License plate bounding box (x, y, w, h)
+
+        Returns:
+            bool: True if the detection is valid, False otherwise
+        """
+        h, w = vehicle_img.shape[:2]
+
+        # Skip if plate bbox is too close to the vehicle image edge
+        if plate_bbox:
+            px, py, pw, ph = plate_bbox
+            edge_margin = 0.05  # 5% margin from edges
+
+            # Calculate distance from edges as percentage of vehicle image size
+            left_edge_dist = px / w
+            right_edge_dist = (w - (px + pw)) / w
+            top_edge_dist = py / h
+            bottom_edge_dist = (h - (py + ph)) / h
+
+            # Skip if the plate is too close to any edge
+            if (
+                left_edge_dist < edge_margin or right_edge_dist < edge_margin or
+                top_edge_dist < edge_margin or bottom_edge_dist < edge_margin
+            ):
+                logger.debug("Skipping vehicle with license plate too close to edge")
+                return False
+
+        return True
+
     def _process_frame(self, frame, timestamp):
         """
         Process a single video frame.
@@ -243,6 +292,10 @@ class StreamProcessor:
 
         # Process each detected vehicle
         for i, vehicle in enumerate(vehicles):
+            # skip vertical images
+            if not self._is_good_aspect_ratio(vehicle['bbox']):
+                continue
+
             # Extract the vehicle portion of the image
             vehicle_img = self._crop_vehicle(frame, vehicle)
 
@@ -257,6 +310,10 @@ class StreamProcessor:
                 self.ocr_confidence_threshold
             )
             plate_img, plate_bbox, plate_detection_confidence, plate_number, ocr_confidence = res
+
+            # skip images with bad plate positions
+            if not self._is_good_plate_position(vehicle_img, plate_bbox):
+                continue
 
             # Store the detection with detailed confidence values and bounding box
             self.record_manager.add_detection(
