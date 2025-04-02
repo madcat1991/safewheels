@@ -247,7 +247,12 @@ class VehicleMonitor:
                 try:
                     # Create InputFile from bytes to avoid reopening file for each user
                     photo = telegram.InputFile(photo_bytes, filename=f"{vehicle_id}.jpg")
-                    await self.bot.send_photo(chat_id=user_id, photo=photo, caption=caption)
+                    await self.bot.send_photo(
+                        chat_id=user_id,
+                        photo=photo,
+                        caption=caption,
+                        write_timeout=30
+                    )
                     success_count += 1
                 except Exception as user_error:
                     logger.error(f"Failed to send notification to user {user_id}: {user_error}")
