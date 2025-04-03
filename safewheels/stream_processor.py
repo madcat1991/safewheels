@@ -1,12 +1,10 @@
 """
-Stream and video file processor for vehicle and license plate detection.
+Stream processor for vehicle and license plate detection.
 """
-import os
 import time
 import threading
 import logging
 from datetime import datetime
-import os.path
 import av
 
 from safewheels.models.vehicle_detector import VehicleDetector
@@ -18,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class StreamProcessor:
     """
-    Processes video streams and files to detect vehicles and their license plates.
+    Processes RTSP streams to detect vehicles and their license plates.
     """
     def __init__(
             self,
@@ -32,7 +30,7 @@ class StreamProcessor:
         Initialize StreamProcessor.
 
         Args:
-            input_source: RTSP stream URL or video file path
+            input_source: RTSP stream URL
             vehicle_detector: VehicleDetector instance
             plate_recognizer: PlateDetector instance
             record_manager: RecordManager for storing detection results
@@ -43,9 +41,6 @@ class StreamProcessor:
         self.plate_detector = plate_detector
         self.record_manager = record_manager
         self.config = config
-
-        # Determine if source is a video file or a stream
-        self.is_file = os.path.isfile(input_source) if isinstance(input_source, str) else False
 
         # Processing parameters - thresholds for each stage of detection
         self.vehicle_confidence_threshold = config.get('vehicle_confidence_threshold', 0.4)
@@ -69,47 +64,43 @@ class StreamProcessor:
         return self._running
 
     def start(self):
-        """Start processing the video source in a separate thread."""
+        """Start processing the stream in a separate thread."""
         if self._running:
             return
 
         self._running = True
-        self.thread = threading.Thread(target=self._process_video)
+        self.thread = threading.Thread(target=self._process_stream)
         self.thread.daemon = True
         self.thread.start()
 
     def stop(self):
-        """Stop processing the video source."""
+        """Stop processing the stream."""
         self._running = False
         if self.thread:
             self.thread.join(timeout=3.0)
 
-    def _process_video(self):
-        """Main processing loop for the video source (stream or file) using PyAV."""
-        source_type = "video file" if self.is_file else "RTSP stream"
-        logger.info(f"Opening {source_type}: {self.input_source}")
+    def _process_stream(self):
+        """Main processing loop for the RTSP stream using PyAV."""
+        logger.info(f"Opening RTSP stream: {self.input_source}")
 
         while self._running:
             try:
-                # For RTSP streams, set options before opening
-                options = {}
-                if not self.is_file:
-                    # Options for RTSP streams:
-                    # - rtsp_transport: Use 'tcp' for more reliable streams over 'udp' if experiencing issues
-                    # - timeout: Timeout in microseconds
-                    # - max_delay: Maximum delay in microseconds before frames are dropped
-                    # - skip_frame: Skip frames in case of decoding errors
-                    options = {
-                        # Use the transport protocol that works best (will auto-switch if errors persist)
-                        'rtsp_transport': getattr(self, '_rtsp_transport', 'tcp'),
-                        'stimeout': '5000000',  # Socket timeout in microseconds (5 seconds)
-                        'max_delay': '500000',  # 500ms max delay
-                        'skip_frame': '1',  # Skip non-reference frames on errors
-                        # Don't buffer frames, generate timestamps if missing
-                        'fflags': 'nobuffer+genpts+discardcorrupt',
-                        'flags': 'low_delay',  # Low latency mode
-                        'analyzeduration': '1000000'  # Analyze duration in microseconds (1 second)
-                    }
+                # Options for RTSP streams:
+                # - rtsp_transport: Use 'tcp' for more reliable streams over 'udp' if experiencing issues
+                # - timeout: Timeout in microseconds
+                # - max_delay: Maximum delay in microseconds before frames are dropped
+                # - skip_frame: Skip frames in case of decoding errors
+                options = {
+                    # Use the transport protocol that works best (will auto-switch if errors persist)
+                    'rtsp_transport': getattr(self, '_rtsp_transport', 'tcp'),
+                    'stimeout': '5000000',  # Socket timeout in microseconds (5 seconds)
+                    'max_delay': '500000',  # 500ms max delay
+                    'skip_frame': '1',  # Skip non-reference frames on errors
+                    # Don't buffer frames, generate timestamps if missing
+                    'fflags': 'nobuffer+genpts+discardcorrupt',
+                    'flags': 'low_delay',  # Low latency mode
+                    'analyzeduration': '1000000'  # Analyze duration in microseconds (1 second)
+                }
 
                 # Use PyAV to process the video
                 with av.open(self.input_source, options=options) as container:
@@ -125,15 +116,7 @@ class StreamProcessor:
 
                     # Get video properties
                     fps = getattr(video_stream, 'average_rate', None) or video_stream.framerate
-                    total_frames = video_stream.frames if video_stream.frames > 0 else None
-
-                    if self.is_file and total_frames:
-                        logger.info(
-                            f"Video has {total_frames} frames at {fps} FPS. "
-                            f"Processing every {self.process_every_n_frames}th frame."
-                        )
-                    else:
-                        logger.info(f"Stream FPS: {fps}. Processing every {self.process_every_n_frames}th frame.")
+                    logger.info(f"Stream FPS: {fps}. Processing every {self.process_every_n_frames}th frame.")
 
                     # Counter for processing every nth frame
                     nth_frame_counter = 0
@@ -173,55 +156,40 @@ class StreamProcessor:
                             # Handle decoding errors for this packet but continue with next
                             logger.warning(f"Decoding error: {e} - skipping packet")
 
-                    # If we're processing a file and reached the end
-                    if self.is_file:
-                        logger.info("Finished processing file")
-                        self._running = False
-                        break
-                    else:
-                        # For streams, if we get here, we need to reconnect
-                        logger.warning("Stream ended. Attempting to reconnect...")
-                        time.sleep(3)  # Wait before reconnecting
+                    # If we get here, we need to reconnect
+                    logger.warning("Stream ended. Attempting to reconnect...")
+                    time.sleep(3)  # Wait before reconnecting
 
             except av.AVError as e:
-                logger.error(f"Video decoding error: {e}")
-                if self.is_file:
-                    self._running = False
-                    break
+                # For streams, try to reconnect with increasing backoff
+                retry_delay = min(10, (self._retry_count if hasattr(self, '_retry_count') else 0) + 3)
+                self._retry_count = retry_delay - 2  # Store for next time
+
+                if 'End of file' in str(e):
+                    logger.warning(f"Stream ended. Attempting to reconnect in {retry_delay} seconds...")
                 else:
-                    # For streams, try to reconnect with increasing backoff
-                    retry_delay = min(10, (self._retry_count if hasattr(self, '_retry_count') else 0) + 3)
-                    self._retry_count = retry_delay - 2  # Store for next time
+                    logger.warning(f"RTSP connection error: {e}. Reconnecting in {retry_delay} seconds...")
 
-                    if 'End of file' in str(e):
-                        logger.warning(f"Stream ended. Attempting to reconnect in {retry_delay} seconds...")
-                    else:
-                        logger.warning(f"RTSP connection error: {e}. Reconnecting in {retry_delay} seconds...")
+                # Try switching transport protocol on persistent errors
+                # If we're using TCP, try UDP next time and vice versa
+                if hasattr(self, '_rtsp_connection_errors'):
+                    self._rtsp_connection_errors += 1
+                    if self._rtsp_connection_errors > 3:
+                        current_transport = options.get('rtsp_transport', 'tcp')
+                        new_transport = 'udp' if current_transport == 'tcp' else 'tcp'
+                        logger.info(f"Switching RTSP transport from {current_transport} to {new_transport}")
+                        self._rtsp_transport = new_transport
+                        self._rtsp_connection_errors = 0
+                else:
+                    self._rtsp_connection_errors = 1
+                    self._rtsp_transport = options.get('rtsp_transport', 'tcp')
 
-                    # Try switching transport protocol on persistent errors
-                    # If we're using TCP, try UDP next time and vice versa
-                    if hasattr(self, '_rtsp_connection_errors'):
-                        self._rtsp_connection_errors += 1
-                        if self._rtsp_connection_errors > 3:
-                            current_transport = options.get('rtsp_transport', 'tcp')
-                            new_transport = 'udp' if current_transport == 'tcp' else 'tcp'
-                            logger.info(f"Switching RTSP transport from {current_transport} to {new_transport}")
-                            self._rtsp_transport = new_transport
-                            self._rtsp_connection_errors = 0
-                    else:
-                        self._rtsp_connection_errors = 1
-                        self._rtsp_transport = options.get('rtsp_transport', 'tcp')
-
-                    time.sleep(retry_delay)
+                time.sleep(retry_delay)
             except Exception as e:
-                logger.error(f"Error in video processing: {e}")
-                if self.is_file:
-                    self._running = False
-                    break
-                else:
-                    # For streams, retry for general errors
-                    logger.warning(f"Unexpected error: {e}. Attempting to reconnect in 5 seconds...")
-                    time.sleep(5)
+                logger.error(f"Error in stream processing: {e}")
+                # For streams, retry for general errors
+                logger.warning(f"Unexpected error: {e}. Attempting to reconnect in 5 seconds...")
+                time.sleep(5)
 
     def _is_good_aspect_ratio(self, vehicle_bbox, threshold=0.8):
         """

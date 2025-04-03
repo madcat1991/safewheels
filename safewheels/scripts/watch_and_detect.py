@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 """
-Video stream and file processing for vehicle and license plate detection.
+RTSP stream processing for vehicle and license plate detection.
 """
 import time
 import logging
 import argparse
-import os.path
 
 from safewheels.functions import get_compute_params
 from safewheels.stream_processor import StreamProcessor
@@ -27,37 +26,32 @@ def main():
     """Main execution function for SafeWheels."""
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Vehicle and license plate detection script')
-    parser.add_argument('--video', type=str, help='Path to video file for processing')
     parser.add_argument('--config', type=str, help='Path to configuration file')
     args = parser.parse_args()
 
     # Load configuration
     config = load_config(args.config)
 
-    # Determine input source (video file or RTSP stream)
-    if args.video and os.path.isfile(args.video):
-        input_source = args.video
-        logger.info(f"Using video file: {input_source}")
-    else:
-        # Use RTSP stream from config if no video file provided
-        rtsp_url = config.get('rtsp_url')
-        rtsp_username = config.get('rtsp_username')
-        rtsp_password = config.get('rtsp_password')
+    # Get RTSP URL from configuration
+    rtsp_url = config.get('rtsp_url')
+    rtsp_username = config.get('rtsp_username')
+    rtsp_password = config.get('rtsp_password')
 
-        if not rtsp_url:
-            logger.error("No RTSP URL provided in configuration and no valid video file specified.")
-            return
+    if not rtsp_url:
+        logger.error("No RTSP URL provided in configuration.")
+        return
 
-        # Build authenticated URL if credentials are provided
-        if rtsp_username and rtsp_password:
-            # Format: rtsp://username:password@ip:port/path
-            parsed_url = rtsp_url.split('://')
-            if len(parsed_url) == 2:
-                protocol, address = parsed_url
-                rtsp_url = f"{protocol}://{rtsp_username}:{rtsp_password}@{address}"
-                logger.info("Using authenticated RTSP stream")
+    # Build authenticated URL if credentials are provided
+    if rtsp_username and rtsp_password:
+        # Format: rtsp://username:password@ip:port/path
+        parsed_url = rtsp_url.split('://')
+        if len(parsed_url) == 2:
+            protocol, address = parsed_url
+            rtsp_url = f"{protocol}://{rtsp_username}:{rtsp_password}@{address}"
+            logger.info("Using authenticated RTSP stream")
 
-        input_source = rtsp_url
+    input_source = rtsp_url
+    logger.info(f"Using RTSP stream: {input_source}")
 
     use_gpu, device, model_precision = get_compute_params(config)
 
@@ -93,17 +87,9 @@ def main():
         logger.info("Starting SafeWheels monitoring")
         processor.start()
 
-        # For video files, wait until processing is done
-        # For streams, keep the process running indefinitely
-        if args.video and os.path.isfile(args.video):
-            # Wait for video processing to finish by checking if processor is still running
-            while processor.running:
-                time.sleep(1)
-            logger.info("Video processing completed")
-        else:
-            # For streams, keep running indefinitely
-            while True:
-                time.sleep(1)
+        # Keep running indefinitely for the stream
+        while True:
+            time.sleep(1)
 
     except KeyboardInterrupt:
         logger.info("Shutting down SafeWheels")

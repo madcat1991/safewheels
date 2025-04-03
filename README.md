@@ -1,10 +1,10 @@
 # SafeWheels
 
-A Python application for processing video streams and files to detect vehicles and recognize license plates.
+A Python application for processing RTSP camera streams to detect vehicles and recognize license plates.
 
 ## Features
 
-- Process RTSP camera streams or video files
+- Process RTSP camera streams
 - Vehicle detection using YOLOv8
 - License plate detection using a [pre-trained](https://github.com/Muhammad-Zeerak-Khan/Automatic-License-Plate-Recognition-using-YOLOv8) YOLOv8 model
 - License plate recognition using fast-plate-ocr with European plate models
@@ -71,6 +71,8 @@ Edit the configuration file at `config/config.json`:
 ```
 
 Key configuration parameters:
+- `rtsp_url`: URL of your RTSP camera stream
+- `rtsp_username` and `rtsp_password`: Credentials for your RTSP stream (if required)
 - `vehicle_confidence_threshold`: Minimum confidence for vehicle detection (0.0-1.0)
 - `plate_detection_threshold`: Minimum confidence for license plate detection (0.0-1.0)
 - `ocr_confidence_threshold`: Minimum confidence for OCR recognition (0.0-1.0)
@@ -94,14 +96,6 @@ Run the application using the RTSP URL defined in the config:
 python -m safewheels.scripts.watch_and_detect --config config/config.json
 ```
 
-### Process video file
-
-For debugging or offline analysis, you can process a video file:
-
-```
-python -m safewheels.scripts.watch_and_detect --video /path/to/your/video.mp4 --config config/config.json
-```
-
 ### Use a specific configuration file
 
 You can specify a custom configuration file path:
@@ -122,7 +116,7 @@ SafeWheels includes several utility scripts to help with monitoring, recognition
 
 ### Watch and Detect
 
-The `watch_and_detect.py` script continuously monitors a video stream or file for vehicle detections:
+The `watch_and_detect.py` script continuously monitors a video stream for vehicle detections:
 
 ```bash
 python -m safewheels.scripts.watch_and_detect --config config/config.json
