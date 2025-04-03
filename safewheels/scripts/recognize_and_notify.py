@@ -227,16 +227,17 @@ class PlateRecognitionProcessor:
             else:
                 latest_timestamp_per_vehicle[vehicle_id] = latest_timestamp
 
-        vehicles = {}
-        for vehicle_id in latest_timestamp_per_vehicle:
-            vehicles[vehicle_id] = {
-                "latest_timestamp": latest_timestamp_per_vehicle[vehicle_id],
+        sorted_vehicles = []
+        for vehicle_id, latest_timestamp in sorted(latest_timestamp_per_vehicle.items(), key=lambda x: x[1]):
+            sorted_vehicles.append({
+                "vehicle_id": vehicle_id,
+                "latest_timestamp": latest_timestamp,
                 "best_image_record": best_image_record_per_vehicle[vehicle_id],
                 "bbox_records": bbox_records_per_vehicle.get(vehicle_id, [])
-            }
-        logger.info(f"Found {len(vehicles)} unprocessed vehicles")
+            })
+        logger.info(f"Found {len(sorted_vehicles)} unprocessed vehicles")
 
-        return vehicles
+        return sorted_vehicles
 
     def extract_plate_image(self, image_path, plate_bbox):
         """
@@ -269,18 +270,18 @@ class PlateRecognitionProcessor:
             logger.error(f"Error extracting plate from image: {e}")
             return None
 
-    def get_notification_data(self, vehicle_id, vehicle_data):
+    def get_notification_data(self, vehicle_data):
         """
         Process all records for a vehicle, extract and recognize license plates,
         and prepare notification data.
 
         Args:
-            vehicle_id: ID of the vehicle
             vehicle_data: Dict with vehicle data
 
         Returns:
             Dict with notification data
         """
+        vehicle_id = vehicle_data["vehicle_id"]
         logger.info(f"Processing vehicle {vehicle_id}")
 
         latest_timestamp = vehicle_data["latest_timestamp"]
@@ -365,8 +366,9 @@ class PlateRecognitionProcessor:
             for user_id in self.authorized_users:
                 try:
                     # Create InputFile from bytes to avoid reopening file for each user
+                    # TODO разберись с именем файла
                     photo = telegram.InputFile(photo_bytes, filename=f"{vehicle_id}.jpg")
-                    # await self.bot.send_photo(chat_id=user_id, photo=photo, caption=caption)
+                    await self.bot.send_photo(chat_id=user_id, photo=photo, caption=caption)
                     success_count += 1
                 except Exception as user_error:
                     logger.error(f"Failed to send notification to user {user_id}: {user_error}")
@@ -391,15 +393,14 @@ class PlateRecognitionProcessor:
         vehicles = self.get_unprocessed_vehicles()
 
         # Process each vehicle
-        for vehicle_id, vehicle_data in vehicles.items():
+        for vehicle_data in vehicles:
             # Process vehicle's records
-            notification_data = self.get_notification_data(vehicle_id, vehicle_data)
+            notification_data = self.get_notification_data(vehicle_data)
 
             # Send notification
             await self.send_notification(notification_data)
 
-            # Update the last processed timestamp
-            # TODO: нужно гарантировать порядок по времени
+            # Update the last processed timestamp (vehicles must be sorted by latest timestamp)
             latest_timestamp = notification_data["latest_timestamp"]
             if latest_timestamp > self.last_processed_timestamp:
                 # Add a small buffer (0.001 sec) to avoid processing
