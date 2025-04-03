@@ -20,6 +20,7 @@ import telegram
 from safewheels.functions import get_compute_params, add_padding_to_bbox, draw_detection_on_image
 from safewheels.models.plate_recognizer import EUPlateRecognizer
 from safewheels.utils.config import load_config
+from safewheels.storage.record_manager import RecordManager
 
 # Configure logging
 logging.basicConfig(
@@ -47,6 +48,7 @@ class PlateRecognitionProcessor:
         self.storage_path = self.config.get("storage_path")
         self.check_interval_sec = self.config.get("check_interval_sec", 30)
         self.ocr_confidence_threshold = self.config.get("ocr_confidence_threshold", 0.3)
+        self.vehicle_id_threshold_sec = self.config.get("vehicle_id_threshold_sec", 5)
 
         # Get database and image directory from config
         self.db_filename = self.config.get("db_filename")
@@ -60,6 +62,14 @@ class PlateRecognitionProcessor:
         if not os.path.exists(self.db_path):
             logger.error(f"Database file {self.db_path} doesn't exist")
             raise FileNotFoundError(f"Database file {self.db_path} not found")
+
+        # Initialize RecordManager for saving recognitions
+        self.record_manager = RecordManager(
+            storage_path=self.storage_path,
+            vehicle_id_threshold_sec=self.vehicle_id_threshold_sec,
+            db_filename=self.db_filename,
+            images_dirname=self.images_dirname
+        )
 
         # Initialize plate recognizer
         use_gpu, device, _ = get_compute_params(self.config)
@@ -149,7 +159,6 @@ class PlateRecognitionProcessor:
             # Get all completed and unprocessed vehicle records in a single query
             # A completed vehicle is one that hasn't been detected for a certain threshold period
             current_time = time.time()
-            threshold_sec = self.config.get("vehicle_id_threshold_sec", 5)
 
             query = """
                 WITH
@@ -187,7 +196,7 @@ class PlateRecognitionProcessor:
             cursor.execute(query, (
                 self.last_processed_timestamp,
                 current_time,
-                threshold_sec
+                self.vehicle_id_threshold_sec
             ))
             all_records = cursor.fetchall()
             conn.close()
@@ -332,6 +341,13 @@ class PlateRecognitionProcessor:
         plate_number = notification_data["plate_number"]
         ocr_confidence = notification_data["ocr_confidence"]
         record = notification_data["record"]
+
+        # Save recognition results to database
+        self.record_manager.save_recognition(
+            detection_id=record["id"],
+            plate_text=plate_number,
+            ocr_confidence=ocr_confidence
+        )
 
         image_path = record["image_path"]
         plate_bbox = record["plate_bbox"]

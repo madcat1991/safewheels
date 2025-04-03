@@ -81,9 +81,21 @@ class RecordManager:
             )
             ''')
 
+            # Create recognitions table
+            cursor.execute('''
+            CREATE TABLE recognitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                detection_id INTEGER NOT NULL,
+                plate_text TEXT,
+                ocr_confidence REAL,
+                FOREIGN KEY(detection_id) REFERENCES detections(id)
+            )
+            ''')
+
             # Create indexes for faster queries
             cursor.execute('CREATE INDEX idx_vehicle_id ON detections(vehicle_id)')
             cursor.execute('CREATE INDEX idx_timestamp ON detections(timestamp)')
+            cursor.execute('CREATE INDEX idx_detection_id ON recognitions(detection_id)')
 
             conn.commit()
             conn.close()
@@ -163,3 +175,47 @@ class RecordManager:
             f"Saved vehicle detection with ID {self.current_vehicle_id} "
             f"(confidence: {vehicle_confidence:.2f})"
         )
+
+    def save_recognition(self, detection_id, plate_text, ocr_confidence):
+        """
+        Add a license plate recognition record for a vehicle.
+
+        Args:
+            detection_id: ID of the detection record
+            plate_text: Recognized license plate text (can be None)
+            ocr_confidence: Confidence score of the OCR recognition
+
+        Returns:
+            The ID of the inserted recognition record, or None if insertion failed
+        """
+        # Insert recognition record into database
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                INSERT INTO recognitions (
+                    detection_id,
+                    plate_text,
+                    ocr_confidence
+                ) VALUES (?, ?, ?)
+            ''', (
+                detection_id,
+                plate_text,
+                ocr_confidence
+            ))
+
+            recognition_id = cursor.lastrowid
+
+            conn.commit()
+            conn.close()
+
+            logger.info(
+                f"Saved recognition record {recognition_id} for detection {detection_id} "
+                f"with plate '{plate_text}' (confidence: {ocr_confidence:.2f})"
+            )
+
+            return recognition_id
+        except sqlite3.Error as e:
+            logger.error(f"Error saving recognition to database: {e}")
+            return None
