@@ -17,7 +17,7 @@ import cv2
 import asyncio
 import telegram
 
-from safewheels.functions import get_compute_params, add_padding_to_bbox
+from safewheels.functions import get_compute_params, add_padding_to_bbox, draw_detection_on_image
 from safewheels.models.plate_recognizer import EUPlateRecognizer
 from safewheels.utils.config import load_config
 
@@ -336,11 +336,22 @@ class PlateRecognitionProcessor:
         image_path = record["image_path"]
         plate_bbox = record["plate_bbox"]
         datetime_str = datetime.fromtimestamp(record["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-        # TODO add bbox and ocr_confidence on image
 
         if not os.path.exists(image_path):
             logger.error(f"Image {image_path} does not exist")
             return False
+
+        img = cv2.imread(image_path)
+        if img is None:
+            logger.error(f"Failed to load image: {image_path}")
+            return False
+
+        # Draw detection information on the image if available
+        img = draw_detection_on_image(img, plate_bbox, plate_number)
+
+        # Convert the image to bytes directly in memory
+        _, img_encoded = cv2.imencode('.jpg', img)
+        photo_bytes = img_encoded.tobytes()
 
         # Prepare caption
         caption = f"🚗 Vehicle detected: {vehicle_id}\n"
@@ -360,19 +371,15 @@ class PlateRecognitionProcessor:
         success_count = 0
         error_count = 0
 
-        with open(image_path, 'rb') as photo_file:
-            photo_bytes = photo_file.read()
-
-            for user_id in self.authorized_users:
-                try:
-                    # Create InputFile from bytes to avoid reopening file for each user
-                    # TODO разберись с именем файла
-                    photo = telegram.InputFile(photo_bytes, filename=f"{vehicle_id}.jpg")
-                    await self.bot.send_photo(chat_id=user_id, photo=photo, caption=caption)
-                    success_count += 1
-                except Exception as user_error:
-                    logger.error(f"Failed to send notification to user {user_id}: {user_error}")
-                    error_count += 1
+        for user_id in self.authorized_users:
+            try:
+                # Create InputFile from bytes to avoid reopening file for each user
+                photo = telegram.InputFile(photo_bytes, filename=f"{vehicle_id}.jpg")
+                await self.bot.send_photo(chat_id=user_id, photo=photo, caption=caption)
+                success_count += 1
+            except Exception as user_error:
+                logger.error(f"Failed to send notification to user {user_id}: {user_error}")
+                error_count += 1
 
         if success_count > 0:
             logger.info(

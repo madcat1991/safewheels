@@ -1,6 +1,39 @@
 import cv2
 
 
+def draw_detection_on_image(img, plate_bbox, plate_number=None):
+    """
+    Draw bounding box and plate number on an image.
+
+    Args:
+        img: The original image
+        plate_bbox: Bounding box coordinates for the license plate [x, y, w, h]
+        plate_number: Recognized license plate number (optional)
+
+    Returns:
+        Image with bounding box and text drawn on it
+    """
+    # Create a copy of the image to avoid modifying the original
+    result_img = img.copy()
+
+    # Draw bounding box if available
+    if plate_bbox is not None:
+        px, py, pw, ph = plate_bbox
+        # Draw the bounding box in green
+        cv2.rectangle(result_img, (px, py), (px + pw, py + ph), (0, 153, 255), 2)
+
+        # Add plate number if available
+        if plate_number is not None:
+            # Background for text
+            text = f"{plate_number}"
+            (text_width, text_height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            cv2.rectangle(result_img, (px, py - text_height - 10), (px + text_width + 10, py), (0, 0, 255), -1)
+            # Text in white
+            cv2.putText(result_img, text, (px + 5, py - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+    return result_img
+
+
 def get_compute_params(config):
     """
     Get compute parameters from the configuration.
