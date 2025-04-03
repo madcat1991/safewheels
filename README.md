@@ -12,7 +12,8 @@ A Python application for processing video streams and files to detect vehicles a
 - Fast processing with optimized preprocessing pipeline
 - Groups multiple images of the same vehicle to improve recognition accuracy
 - Stores vehicle images and plate information in SQLite database
-- Real-time Telegram notifications with best vehicle images
+- Near real-time Telegram notifications with best vehicle images
+- Automatic cleanup of processed records to manage disk space
 
 ## Requirements
 
@@ -90,7 +91,7 @@ Key configuration parameters:
 Run the application using the RTSP URL defined in the config:
 
 ```
-python -m safewheels.main
+python -m safewheels.scripts.watch_and_detect --config config/config.json
 ```
 
 ### Process video file
@@ -98,7 +99,7 @@ python -m safewheels.main
 For debugging or offline analysis, you can process a video file:
 
 ```
-python -m safewheels.main --video /path/to/your/video.mp4
+python -m safewheels.scripts.watch_and_detect --video /path/to/your/video.mp4 --config config/config.json
 ```
 
 ### Use a specific configuration file
@@ -106,7 +107,7 @@ python -m safewheels.main --video /path/to/your/video.mp4
 You can specify a custom configuration file path:
 
 ```
-python -m safewheels.main --config /path/to/custom/config.json
+python -m safewheels.scripts.watch_and_detect --config /path/to/custom/config.json
 ```
 
 ## Data Storage
@@ -115,11 +116,51 @@ Detected vehicles and license plates are stored in the configured `storage_path`
 - Vehicle images in the specified `images_dirname` directory
 - SQLite database (`db_filename`) with detection records and metadata
 
-## Monitoring and Notifications
+## Scripts
 
-SafeWheels includes a monitoring script that periodically checks detection records and sends the best images to a Telegram chat.
+SafeWheels includes several utility scripts to help with monitoring, recognition, and system maintenance.
 
-### Setting up Telegram notifications
+### Watch and Detect
+
+The `watch_and_detect.py` script continuously monitors a video stream or file for vehicle detections:
+
+```bash
+python -m safewheels.scripts.watch_and_detect --config config/config.json
+```
+
+### Recognize and Notify
+
+The `recognize_and_notify.py` script processes detected vehicles, recognizes license plates, and sends notifications:
+
+```bash
+python -m safewheels.scripts.recognize_and_notify --config config/config.json
+```
+
+The script periodically checks the database at the interval specified by `check_interval_sec`:
+1. It identifies vehicles that haven't been detected for at least `vehicle_id_threshold_sec` seconds (considered "completed")
+2. For each completed vehicle not already processed, it selects the best image based on confidence scores
+3. It recognizes license plates from the detected plate areas
+4. The selected image is sent to all authorized Telegram users with relevant details
+5. The script tracks the last processed timestamp and saves it to the file specified by `timestamp_file` to avoid duplicate notifications
+
+### Cleanup Processed
+
+The `cleanup_processed.py` script helps manage disk space by removing detections that don't have corresponding recognition records:
+
+```bash
+python -m safewheels.scripts.cleanup_processed --config config/config.json --min-age 24
+```
+
+Command-line arguments:
+- `--min-age`: Minimum age in hours for records to be eligible for cleanup (default: 24)
+- `--dry-run`: Run in simulation mode without actually deleting files
+
+This script finds and removes:
+1. Detection records in the database that don't have a corresponding recognition record
+2. The associated image files for those detections
+3. Only processes records older than the specified minimum age
+
+## Setting up Telegram notifications
 
 1. Create a Telegram bot using BotFather
    - Message @BotFather on Telegram
@@ -145,15 +186,45 @@ SafeWheels includes a monitoring script that periodically checks detection recor
    }
    ```
 
-### Running the monitor script
+## Continuous Operation
 
-```bash
-python scripts/monitor_and_notify.py -c /path/to/config.json
+These scripts are designed to run continuously. To ensure they stay running even after system reboots, consider using a service manager like systemd (Linux) or creating a launch agent (macOS).
+
+Example systemd service (Linux):
+
+```
+[Unit]
+Description=SafeWheels Vehicle Detection Service
+After=network.target
+
+[Service]
+User=yourusername
+WorkingDirectory=/path/to/safewheels
+ExecStart=/usr/bin/python -m safewheels.scripts.watch_and_detect --config /path/to/config.json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-The script will identify completed vehicle detections and send the best image for each vehicle to all authorized Telegram users. For each vehicle, it selects the image with the highest confidence based on this priority:
-1. Highest OCR confidence (plate recognized)
-2. Highest plate detection confidence
-3. Highest vehicle detection confidence
+## Troubleshooting
 
-For more detailed information about the monitoring script, see the [scripts/README.md](scripts/README.md) file.
+If you're not receiving notifications:
+
+1. Check the Telegram configuration
+   - Verify the bot token in config.json
+   - Ensure your Telegram user ID is correctly listed in the `authorized_users` array
+   - Verify that each user ID is a number, not a string (e.g., `123456789`, not `"123456789"`)
+   - Confirm that each authorized user has started a chat with the bot
+   - Test the bot by sending it a direct message
+
+2. Check the database setup
+   - Ensure the SQLite database file exists at the configured location
+   - Verify that the database contains records (use `sqlite3 path/to/database.db` and run `.tables` and `SELECT COUNT(*) FROM detections;`)
+   - Check that the database has the correct schema (run `.schema detections` in SQLite)
+
+3. Review logs and permissions
+   - Check the console output for error messages
+   - Verify the script has read access to the database and images directory
+   - Ensure the images referenced in the database exist in the images directory

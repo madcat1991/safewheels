@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 """
-Main module for SafeWheels - video stream and file processing for vehicle detection and license plate recognition.
+Video stream and file processing for vehicle and license plate detection.
 """
 import time
 import logging
 import argparse
 import os.path
 
+from safewheels.functions import get_compute_params
 from safewheels.stream_processor import StreamProcessor
-from safewheels.models.detector import VehicleDetector
-from safewheels.models.plate_recognizer import EUPlateRecognizer
+from safewheels.models.vehicle_detector import VehicleDetector
+from safewheels.models.plate_detector import PlateDetector
 from safewheels.storage.record_manager import RecordManager
 from safewheels.utils.config import load_config
 
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 def main():
     """Main execution function for SafeWheels."""
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='SafeWheels - Vehicle and license plate detection')
+    parser = argparse.ArgumentParser(description='Vehicle and license plate detection script')
     parser.add_argument('--video', type=str, help='Path to video file for processing')
     parser.add_argument('--config', type=str, help='Path to configuration file')
     args = parser.parse_args()
@@ -58,20 +59,7 @@ def main():
 
         input_source = rtsp_url
 
-    # Initialize components with GPU configuration
-    use_gpu = config.get('use_gpu', True)
-    device_type = config.get('device_type', None)  # Auto-detect if None
-    model_precision = config.get('model_precision', 'fp16')
-    cuda_device = config.get('cuda_device', 0)
-
-    # If CUDA device is specified, update device name
-    device = None
-    if device_type == 'cuda' and cuda_device is not None:
-        device = f'cuda:{cuda_device}'
-    else:
-        device = device_type
-
-    logger.info(f"GPU configuration: use_gpu={use_gpu}, device={device}, precision={model_precision}")
+    use_gpu, device, model_precision = get_compute_params(config)
 
     vehicle_detector = VehicleDetector(
         use_gpu=use_gpu,
@@ -79,7 +67,7 @@ def main():
         model_precision=model_precision
     )
 
-    plate_recognizer = EUPlateRecognizer(
+    plate_detector = PlateDetector(
         gpu=use_gpu,
         device=device,
         model_precision=model_precision
@@ -96,7 +84,7 @@ def main():
     processor = StreamProcessor(
         input_source=input_source,
         vehicle_detector=vehicle_detector,
-        plate_recognizer=plate_recognizer,
+        plate_detector=plate_detector,
         record_manager=record_manager,
         config=config
     )

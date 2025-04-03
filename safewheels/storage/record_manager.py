@@ -1,6 +1,7 @@
 """
 Record manager for storing vehicle and license plate detections.
 """
+import json
 import os
 import logging
 import cv2
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class RecordManager:
     """
-    Storage manager for vehicle detections and license plate information.
+    Storage manager for vehicle and license plate detections.
     Saves detection data in SQLite database and manages image storage.
     """
 
@@ -67,24 +68,34 @@ class RecordManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Create detections table
+            # Create detections table with updated schema
             cursor.execute('''
             CREATE TABLE detections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 vehicle_id TEXT NOT NULL,
                 timestamp REAL NOT NULL,
-                datetime_ms TEXT NOT NULL,
                 image TEXT NOT NULL,
                 vehicle_confidence REAL NOT NULL,
-                plate_detection_confidence REAL NOT NULL,
-                plate_number TEXT,
-                ocr_confidence REAL NOT NULL
+                plate_bbox TEXT,
+                plate_confidence REAL NOT NULL
+            )
+            ''')
+
+            # Create recognitions table
+            cursor.execute('''
+            CREATE TABLE recognitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                detection_id INTEGER NOT NULL,
+                plate_text TEXT,
+                ocr_confidence REAL,
+                FOREIGN KEY(detection_id) REFERENCES detections(id)
             )
             ''')
 
             # Create indexes for faster queries
             cursor.execute('CREATE INDEX idx_vehicle_id ON detections(vehicle_id)')
             cursor.execute('CREATE INDEX idx_timestamp ON detections(timestamp)')
+            cursor.execute('CREATE INDEX idx_detection_id ON recognitions(detection_id)')
 
             conn.commit()
             conn.close()
@@ -97,8 +108,7 @@ class RecordManager:
         """Generate a unique short hash ID for a vehicle."""
         return uuid.uuid4().hex[:6]  # 6 character hex ID
 
-    def add_detection(self, timestamp, vehicle_img, vehicle_confidence=0.0, plate_bbox=None,
-                      plate_detection_confidence=0.0, plate_number=None, ocr_confidence=0.0):
+    def add_detection(self, timestamp, vehicle_img, vehicle_confidence=0.0, plate_bbox=None, plate_confidence=0.0):
         """
         Add a new vehicle detection record and save the image with a bounding box for the license plate.
 
@@ -107,9 +117,7 @@ class RecordManager:
             vehicle_img: Image of the detected vehicle
             vehicle_confidence: Confidence score for the vehicle detection
             plate_bbox: Bounding box of the detected license plate (x, y, w, h) or None
-            plate_detection_confidence: Confidence score for plate detection
-            plate_number: Recognized license plate text (or None if not recognized)
-            ocr_confidence: Confidence score for the OCR recognition
+            plate_confidence: Confidence score for plate detection
         """
         # Check if we need to generate a new vehicle ID based on time threshold
         if timestamp - self.last_detection_time > self.vehicle_id_threshold_sec:
@@ -119,44 +127,19 @@ class RecordManager:
         # Update the last detection time
         self.last_detection_time = timestamp
 
-        # Create a copy of the vehicle image to draw on
-        annotated_img = vehicle_img.copy()
-
-        # Draw bounding box for license plate if available
-        if plate_bbox is not None:
-            x, y, w, h = plate_bbox
-
-            # Draw green rectangle around the plate
-            cv2.rectangle(
-                annotated_img,
-                (x, y),
-                (x + w, y + h),
-                (0, 255, 0),  # Green color
-                2  # Line thickness
-            )
-
-            # Add the detected plate number as text if available
-            if plate_number:
-                # Position the text above the bounding box if there's space
-                text_y = max(y - 10, 10)
-                cv2.putText(
-                    annotated_img,
-                    plate_number,
-                    (x, text_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,  # Font scale
-                    (0, 255, 0),  # Green color
-                    2  # Line thickness
-                )
-
-        # Generate filename with timestamp (no "vehicle" or "car" in the name)
+        # Generate filename with timestamp and vehicle ID
         current_time = datetime.now()
         timestamp_ms = current_time.strftime("%Y%m%d_%H%M%S_%f")  # Full timestamp with microseconds
-        image_filename = f"{timestamp_ms}.jpg"
+        image_filename = f"{timestamp_ms}_{self.current_vehicle_id}.jpg"
 
-        # Save the annotated image
+        # Save the image
         image_path = os.path.join(self.storage_path, self.images_dirname, image_filename)
-        cv2.imwrite(image_path, annotated_img)
+        cv2.imwrite(image_path, vehicle_img)
+
+        # Convert plate_bbox to string for storage if it exists
+        plate_bbox_str = None
+        if plate_bbox is not None:
+            plate_bbox_str = json.dumps(plate_bbox)
 
         # Insert detection record into database
         try:
@@ -164,20 +147,21 @@ class RecordManager:
             cursor = conn.cursor()
 
             cursor.execute('''
-            INSERT INTO detections (
-                vehicle_id, timestamp, datetime_ms, image,
-                vehicle_confidence, plate_detection_confidence,
-                plate_number, ocr_confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO detections (
+                    vehicle_id,
+                    timestamp,
+                    image,
+                    vehicle_confidence,
+                    plate_bbox,
+                    plate_confidence
+                ) VALUES (?, ?, ?, ?, ?, ?)
             ''', (
                 self.current_vehicle_id,
                 timestamp,
-                datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f"),
                 image_filename,
                 vehicle_confidence,
-                plate_detection_confidence,
-                plate_number if plate_number else "",
-                ocr_confidence
+                plate_bbox_str,
+                plate_confidence
             ))
 
             conn.commit()
@@ -187,12 +171,51 @@ class RecordManager:
             return
 
         # Log the detection
-        if plate_number:
+        logger.info(
+            f"Saved vehicle detection with ID {self.current_vehicle_id} "
+            f"(confidence: {vehicle_confidence:.2f})"
+        )
+
+    def save_recognition(self, detection_id, plate_text, ocr_confidence):
+        """
+        Add a license plate recognition record for a vehicle.
+
+        Args:
+            detection_id: ID of the detection record
+            plate_text: Recognized license plate text (can be None)
+            ocr_confidence: Confidence score of the OCR recognition
+
+        Returns:
+            The ID of the inserted recognition record, or None if insertion failed
+        """
+        # Insert recognition record into database
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                INSERT INTO recognitions (
+                    detection_id,
+                    plate_text,
+                    ocr_confidence
+                ) VALUES (?, ?, ?)
+            ''', (
+                detection_id,
+                plate_text,
+                ocr_confidence
+            ))
+
+            recognition_id = cursor.lastrowid
+
+            conn.commit()
+            conn.close()
+
             logger.info(
-                f"Saved detection with ID {self.current_vehicle_id}, "
-                f"plate {plate_number} (OCR confidence: {ocr_confidence:.2f})")
-        else:
-            logger.info(
-                f"Saved vehicle detection with ID {self.current_vehicle_id} "
-                f"(confidence: {vehicle_confidence:.2f})"
+                f"Saved recognition record {recognition_id} for detection {detection_id} "
+                f"with plate '{plate_text}' (confidence: {ocr_confidence:.2f})"
             )
+
+            return recognition_id
+        except sqlite3.Error as e:
+            logger.error(f"Error saving recognition to database: {e}")
+            return None
