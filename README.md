@@ -2,6 +2,12 @@
 
 A Python application for processing RTSP camera streams to detect vehicles and recognize license plates.
 
+<p align="center">
+   <img width="326" alt="Car plate recognition front example" src="https://github.com/user-attachments/assets/cf33b017-b017-43cb-ac99-86a85cca560a" />
+   <img width="326" alt="Car plate recognition rear example" src="https://github.com/user-attachments/assets/c01db2c7-1820-466b-8e50-d336f8a86925" />
+</p>
+
+
 ## Features
 
 - Process RTSP camera streams
