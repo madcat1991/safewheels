@@ -142,7 +142,7 @@ class VehicleDetector:
 
         h, w = crop.shape[:2]
         # Very naive ratio check
-        if w > 1.2 * h:
+        if w > 1.3 * h:
             return "side"
         else:
             # We'll just say 'front' (or 'rear'). If you prefer separate logic or a real model,

@@ -267,7 +267,7 @@ class PlateRecognitionProcessor:
                 return None
 
             # Add padding to bbox
-            padded_bbox = add_padding_to_bbox(plate_bbox, img.shape, padding_percent=0.1)
+            padded_bbox = add_padding_to_bbox(plate_bbox, img.shape, padding_percent=0.15)
             px, py, pw, ph = padded_bbox
 
             # Crop the plate
